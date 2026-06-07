@@ -1,0 +1,9 @@
+.venv
+backend/.venv/*
+backend/.gitignore
+backend/.python-version
+cli/node_modules
+API.md
+.claude
+.codex
+.idea

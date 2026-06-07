@@ -1,0 +1,21 @@
+{
+  "name": "nanoclaw-cli",
+  "version": "0.1.0",
+  "description": "CLI frontend for Nanoclaw AI assistant",
+  "type": "module",
+  "scripts": {
+    "start": "tsx src/index.ts",
+    "chat": "tsx src/index.ts"
+  },
+  "dependencies": {
+    "@types/react": "^19.2.15",
+    "ink": "^7.0.5",
+    "ink-text-input": "^6.0.0",
+    "react": "^19.2.6",
+    "tsx": "^4.19"
+  },
+  "devDependencies": {
+    "@types/node": "^22",
+    "typescript": "^6.0.3"
+  }
+}
