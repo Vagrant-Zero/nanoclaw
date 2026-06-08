@@ -3,6 +3,7 @@ backend/.venv/*
 backend/.gitignore
 backend/.python-version
 cli/node_modules
+cli/.nanoclaw
 API.md
 .claude
 .codex

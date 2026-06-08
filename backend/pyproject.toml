@@ -1,0 +1,31 @@
+[project]
+name = "nanoclaw"
+version = "0.1.0"
+description = "Personal AI assistant agent with LangGraph"
+readme = "README.md"
+requires-python = ">=3.12"
+dependencies = [
+    "langgraph>=0.4",
+    "langchain-openai>=0.3",
+    "langchain-anthropic>=0.3",
+    "fastapi>=0.115",
+    "uvicorn[standard]>=0.34",
+    "pydantic-settings>=2.7",
+    "httpx>=0.28",
+    "sse-starlette>=2.2",
+]
+
+[project.scripts]
+nanoclaw = "nanoclaw.main:main"
+
+[tool.uv]
+package = true
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[dependency-groups]
+dev = [
+    "hatchling>=1.29.0",
+]
