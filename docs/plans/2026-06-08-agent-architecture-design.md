@@ -73,23 +73,27 @@ PENDING ──→ RUNNING ──→ SUCCEEDED
                   ↘ FAILED ──→ RETRYING ──→ RUNNING (重试循环)
                              ↘ CANCELLED (上游失败，依赖不满足)
                              ↘ COMPENSATING ──→ COMPENSATED (回滚副作用)
+                                                ↘ COMPENSATION_FAILED (补偿自身失败)
 ```
 
 - **CANCELLED**: 当上游依赖任务 FAILED，当前任务无需执行直接取消
 - **COMPENSATING**: 失败后执行 compensation 动作（删除已创建文件等）回滚副作用
 - **COMPENSATED**: compensation 执行完毕
+- **COMPENSATION_FAILED**: compensation 动作自身失败（如文件被锁定无法删除），需要人工介入
 
 ### SSE 事件协议
 
 | 事件 | 载荷 | 触发时机 |
 |------|------|---------|
-| `agent_think` | `{content}` | LLM 产生推理文本 |
+| `agent_think` | `{content, task_id}` | LLM 产生推理文本 |
 | `agent_action` | `{tool, args, task_id}` | 工具调用发起 |
 | `agent_observation` | `{tool, result, task_id}` | 工具返回结果 |
-| `agent_plan` | `{tasks: [...]}` | Planner 产出子任务 DAG |
-| `message_chunk` | `{content}` | 最终回答逐字输出 |
+| `agent_plan` | `{tasks: [...], session_id}` | Planner 产出子任务 DAG |
+| `message_chunk` | `{content, task_id}` | 最终回答逐字输出 |
 | `task_status` | `{task_id, status}` | 子任务状态变更 |
 | `done` | `{session_id}` | 全部处理完成 |
+
+> 所有事件统一携带 `task_id`，即使简单路径（react_node）也携带 `task_id="root"` 保证协议一致。`agent_plan` 替换为 `session_id` 因为计划不归属特定子任务。
 
 ## 组件设计
 
@@ -104,10 +108,10 @@ input → [router] → simple → [react_node] → output
 
 | 节点 | 输入 | 输出 | 行为 |
 |------|------|------|------|
-| **router** | 用户消息 | "simple" / "plan" | LLM 快速分类：是否需要多步分解 |
+| **router** | 用户消息 | "simple" / "plan" | 先走启发式规则（关键词+长度），规则无法判断时再调用 LLM。简单路径走 react_node |
 | **react_node** | 用户消息 | 最终回答 | 直接走 ReAct 循环，调用工具 |
-| **planner** | 用户消息 + 可用工具列表 | Subtask DAG | LLM 拆解为多个子任务，标注依赖关系 |
-| **dispatch** | TaskPlan | 子任务入队 | 遍历 PENDING 子任务，将可执行（依赖已满足）的入队 |
+| **planner** | 用户消息 + 可用工具列表 | Subtask DAG | LLM 拆解为多个子任务，标注依赖关系。输出后经过 `validate_plan()` 校验（循环检测、引用完整性、格式检查） |
+| **dispatch** | TaskPlan | 子任务入队 | 将 PENDING 且满足依赖的子任务入队。Worker 完成后重新触发 dispatch（循环进入） |
 | **await** | 等待信号 | 全部结果 | asyncio.Event 等待所有子任务完成 |
 | **collect** | 子任务结果 | 最终汇总 | 检查失败，触发补偿，聚合输出 |
 
@@ -119,9 +123,11 @@ input → [router] → simple → [react_node] → output
 
 - N 个 Worker（初期 3 个），每个 Worker 内运行一个 ReAct 子图
 - Worker 从 TaskQueue 拉取任务，每个 Worker 同一时间处理一个子任务
-- Worker 拉取任务时检查 `depends_on` 是否全部 SUCCEEDED，不满足则跳过留待下次
+- **TaskQueue 内部维护 DAG 依赖关系**，`dequeue()` 只返回依赖已满足的 subtask。Worker 拿到即可执行，无需自己检查 `depends_on`
 - 每个 ReAct 步骤（think/action/observation）实时写入 Subtask.trace 并通过 SSE 推送给前端
 - Worker 完成后调用 `TaskQueue.complete(id, result)`，触发对应 Event.set()
+- **Worker 有超时保护**：每个任务设置 `max_execution_time`（默认 5 分钟），超时后 Worker 自动放弃，标记 FAILED 并释放 Worker 槽位
+- **所有 LLM 调用必须使用异步 API**（如 LangChain 的 `.ainvoke()`），避免阻塞事件循环
 
 ### 基础 ReAct 图（复用核心）
 
@@ -176,6 +182,37 @@ class Session:
     created_at: float
     messages: list[ChatMessage]      # 消息历史
     active_plan: TaskPlan | None     # 当前正在执行的计划（如有）
+
+# 任务状态枚举
+class TaskStatus(str, Enum):
+    PENDING = "PENDING"
+    RUNNING = "RUNNING"
+    SUCCEEDED = "SUCCEEDED"
+    FAILED = "FAILED"
+    RETRYING = "RETRYING"
+    CANCELLED = "CANCELLED"
+    COMPENSATING = "COMPENSATING"
+    COMPENSATED = "COMPENSATED"
+    COMPENSATION_FAILED = "COMPENSATION_FAILED"
+
+# 运行时影响日志
+@dataclass
+class EffectLogEntry:
+    task_id: str                     # 所属任务
+    subtask_id: str                  # 所属子任务
+    action: str                      # "create_file", "edit_file", "run_command"
+    resource: str                    # file path, URL, etc.
+    metadata: dict                   # 额外信息
+    version: int = 1                 # 用于并发写入的版本号控制
+    timestamp: float
+
+# Checkpoint 状态快照
+@dataclass
+class CheckpointState:
+    graph_state: dict                # SupervisorState
+    queue_snapshot: dict | None      # TaskQueue.snapshot()
+    node_name: str                   # 当前所在节点名
+    timestamp: float
 ```
 
 ### 存储抽象
@@ -191,8 +228,8 @@ TaskRepository(ABC)
 ├── MemoryTaskRepo          # dict[str, TaskPlan]
 └── PgTaskRepo             # SQLAlchemy async + PostgreSQL
 
-TaskQueue(ABC)
-├── MemoryQueue             # asyncio.Queue + dict[Event]，进程内
+TaskQueue(ABC)              # 有状态的 DAG 感知队列
+├── MemoryQueue             # asyncio.Queue + dict[Event]
 └── RedisQueue             # Redis list + pub/sub
 ```
 
@@ -211,41 +248,119 @@ class TaskRepository(ABC):
     async def update_subtask(self, session_id: str, subtask: Subtask)
 
 class TaskQueue(ABC):
-    async def enqueue(self, subtask: Subtask)
-    async def dequeue(self) -> Subtask | None        # Worker 拉任务
+    """TaskQueue 是有状态的管理器，内部维护 DAG 依赖关系。
+    不负责持久化（由 TaskRepository 负责），只负责运行时调度。"""
+
+    async def init_plan(self, plan: TaskPlan)
+    """设置整个 TaskPlan，TaskQueue 解析 DAG 依赖关系"""
+
+    async def dequeue(self) -> Subtask | None
+    """返回一个可执行的 subtask（depends_on 全部 SUCCEEDED 或 CANCELLED）。
+    没有可执行的任务时返回 None。Worker 不自行检查依赖。"""
+
     async def complete(self, task_id: str, result: str)
+    """标记任务完成，内部解析依赖，将新变成可执行的任务标记为 ready"""
+
     async def fail(self, task_id: str, error: str)
-    async def wait_for_all(self, task_ids: list[str]) -> dict   # WaitGroup.Wait()
+    """标记任务失败，标记所有下游为 CANCELLED"""
+
+    async def wait_for_all(self) -> dict
+    """WaitGroup.Wait() — 阻塞直到所有任务到达终态"""
+
+    async def get_runnable_count(self) -> int
+    """当前可执行任务数（TODO/IN_PROGRESS）"""
+
+    async def get_ready_tasks(self) -> list[Subtask]
+    """获取所有当前可执行的任务（用于 dispatch 循环）"""
+
+    async def snapshot(self) -> dict
+    """序列化当前队列状态，用于 checkpoint 持久化"""
+
+    async def restore(self, snapshot: dict) -> None
+    """从 checkpoint 快照恢复队列状态"""
 ```
 
-MemoryQueue 的 `wait_for_all` 实现：
+TaskQueue 不会再出现"任务 dequeue 后发现依赖不满足就丢弃"的问题——`dequeue()` 只在依赖满足时才返回。
+
+**MemoryQueue 实现：**
 
 ```python
 class MemoryQueue(TaskQueue):
     def __init__(self):
+        self._dag: dict[str, list[str]] = {}   # task_id → [depends_on]
+        self._rdag: dict[str, list[str]] = {}  # depends_on → [task_id] (反向)
         self._tasks: dict[str, Subtask] = {}
+        self._ready: asyncio.Queue[Subtask] = asyncio.Queue()
         self._events: dict[str, asyncio.Event] = {}
-        self._queue: asyncio.Queue[Subtask] = asyncio.Queue()
 
-    async def enqueue(self, subtask: Subtask):
-        self._tasks[subtask.id] = subtask
-        self._events[subtask.id] = asyncio.Event()
-        await self._queue.put(subtask)
+    async def init_plan(self, plan: TaskPlan):
+        for s in plan.subtasks:
+            self._dag[s.id] = s.depends_on
+            for dep in s.depends_on:
+                self._rdag.setdefault(dep, []).append(s.id)
+        # 叶子节点（无依赖）直接入 ready 队列
+        for s in plan.subtasks:
+            if not s.depends_on:
+                await self._ready.put(s)
+            self._events[s.id] = asyncio.Event()
 
-    async def wait_for_all(self, task_ids: list[str]) -> dict:
-        await asyncio.gather(*[self._events[tid].wait() for tid in task_ids])
-        return {tid: self._tasks[tid].result for tid in task_ids}
+    async def dequeue(self) -> Subtask | None:
+        try:
+            return await asyncio.wait_for(self._ready.get(), timeout=1.0)
+        except asyncio.TimeoutError:
+            return None
 
     async def complete(self, task_id: str, result: str):
         self._tasks[task_id].result = result
-        self._events[task_id].set()   # 唤醒 await_node
+        self._tasks[task_id].status = TaskStatus.SUCCEEDED
+        self._events[task_id].set()
+        # 将下游变为可执行的任务加入 ready 队列
+        for downstream in self._rdag.get(task_id, []):
+            if all(self._tasks[d].status == TaskStatus.SUCCEEDED
+                   for d in self._dag[downstream]):
+                await self._ready.put(self._tasks[downstream])
+
+    async def wait_for_all(self) -> dict:
+        await asyncio.gather(*[e.wait() for e in self._events.values()])
+        return {tid: self._tasks[tid].result for tid in self._tasks}
+
+    async def snapshot(self) -> dict:
+        return {
+            "dag": self._dag,
+            "rdag": self._rdag,
+            "tasks": {k: asdict(v) for k, v in self._tasks.items()}
+        }
+
+    async def restore(self, snapshot: dict):
+        # 重建 DAG 和 task 状态
+        # 重新入队 status=PENDING 的任务
 ```
+
+`complete()` 内部自动触发下游任务的入队，实现了 H1 的循环 dispatch 需求——每次 complet 事件驱动新的任务进入 ready 队列。
 
 ### LLM 配置
 
 - **主要提供商**: Anthropic（使用 langchain-anthropic 的 ChatAnthropic）
+- **必须使用异步 API**（`ChatAnthropic.ainvoke()`），禁止使用同步 `.invoke()`，避免阻塞事件循环
 - **配置**: 通过 env `NANOCLAW_LLM_MODEL` / `NANOCLAW_ANTHROPIC_API_KEY` 注入
 - **注入方式**: LangGraph 节点的 State 中包含 LLM 实例引用，或通过依赖注入在构建图时传入
+
+### 全局路径配置
+
+```python
+# backend/src/nanoclaw/config.py
+class Settings(BaseSettings):
+    # ...
+    nanoclaw_home: str = ".nanoclaw"  # 默认在当前项目目录下
+    # 实际路径由后端进程的 cwd 决定，通常为项目根目录
+
+# 产生的目录结构（相对于 cwd/.nanoclaw/）：
+# .nanoclaw/
+# ├── checkpoints/   # 图状态 checkpoint
+# ├── eval/          # Evaluation JSONL 日志
+# │   └── events/   # {session_id}/events.jsonl
+# └── memory/        # Memory 数据（初期 JSON，后期 Chroma 持久化）
+```
 
 ### 会话管理
 
@@ -390,11 +505,22 @@ class ContextManager:
 class Checkpointer(ABC):
     """图状态持久化 — 用于 Pod 重启后的断线恢复"""
     @abstractmethod
-    async def save(self, session_id: str, state: dict) -> None: ...
+    async def save(self, session_id: str, state: CheckpointState) -> None: ...
     @abstractmethod
-    async def load(self, session_id: str) -> dict | None: ...
+    async def load(self, session_id: str) -> CheckpointState | None: ...
     @abstractmethod
     async def list_sessions(self) -> list[str]: ...
+```
+
+`CheckpointState` 包含图状态 + 队列快照：
+
+```python
+@dataclass
+class CheckpointState:
+    graph_state: dict                # SupervisorState
+    queue_snapshot: dict | None      # TaskQueue.snapshot()，None 表示无队列状态（简单路径）
+    node_name: str                   # 当前所在节点名
+    timestamp: float
 ```
 
 #### 两套实现
@@ -402,7 +528,7 @@ class Checkpointer(ABC):
 ```python
 # Mock 阶段 — 每个 session 一个本地 JSON 文件
 class LocalFileCheckpointer(Checkpointer):
-    # $NANOCLAW_HOME/checkpoints/{session_id}/state.json
+    # $NANOCLAW_HOME/checkpoints/{session_id}/{timestamp}.json
     # 原子写入：write to temp → rename
 
 # 生产阶段 — PG JSONB 列
@@ -416,13 +542,68 @@ class PgCheckpointer(Checkpointer):
 - ReAct 图每轮 think/action/observation 后
 - Worker 完成一个子任务后
 
-#### 恢复流程（Pod 重启后）
+#### 恢复限制
 
-1. 前端重连时传入 `session_id`
-2. Load checkpoint → 恢复 SupervisorState（包括 TaskPlan 和 Subtask 状态）
-3. 检测 TaskQueue 中 status=RUNNING 的任务（对应 Worker 已死）
-4. 重置 RUNNING → PENDING（让新 Worker pick up）
-5. 从最近的 checkpoint 节点继续执行
+**MemoryQueue 阶段（Phase 1–3）：不完整支持恢复。**
+- MemoryQueue 是进程内状态，Pod 重启后队列快照可以从 checkpoint 加载（队列状态已包含在 CheckpointState.queue_snapshot 中）
+- `restore()` 重建 DAG 和消息队列。但 Workers 在执行中途丢失的任务会被重置为 PENDING 等待重新调度
+- 已有副作用（文件写入等）不会自动回滚——依赖人类判断或后续任务的补偿逻辑
+- 建议：本地开发中如果崩溃，直接重启会话，而不是依赖断点恢复
+
+**RedisQueue 阶段（Phase 4+）：完整恢复。**
+- CheckpointState.queue_snapshot 从 Redis 重建（Redis 本身就是持久化的，不依赖 checkpoint 保存）
+- Worker 通过 Redis 的 `ZSET` lease 机制检测死亡 Worker：Worker 领取任务时写入 `ZADD queue:leases {task_id} {expire_timestamp}`，恢复时扫描过期 lease → 重置为 PENDING
+- 完整的恢复流程：
+
+```
+1. 前端重连时传入 session_id
+2. 从 PG 加载 CheckpointState（图状态）
+3. 从 Redis 恢复队列状态
+4. 扫描过期 Worker lease → 重置 RUNNING → PENDING
+5. 从 checkpoint 节点继续执行
+```
+
+#### 无效应日志（EffectLog）
+
+用于追踪运行时副作用，补偿和恢复都依赖它：
+
+```python
+@dataclass
+class EffectLogEntry:
+    task_id: str
+    subtask_id: str
+    action: str                # "create_file", "edit_file", "run_command"
+    resource: str              # file path, URL, etc.
+    metadata: dict             # 额外信息
+    version: int = 1           # 用于并发写入的版本号控制
+```
+
+**并发写入的版本号控制（MVCC 简化版）：**
+
+当多个 Worker 可能同时写入同一个文件时，使用版本号检测写冲突：
+
+```python
+# 读
+async def read_file(path: str) -> tuple[str, int]:
+    data, version = await storage.read_with_version(path)
+    return data, version
+
+# 写（带版本检查）
+async def write_file(path: str, content: str, expected_version: int) -> bool:
+    current_version = await storage.get_version(path)
+    if current_version != expected_version:
+        return False  # 写入冲突，通知 Worker 重新读取
+    await storage.write(path, content, version=current_version + 1)
+    return True
+```
+
+Worker 检测到写入冲突后：
+1. 撤销当前步骤的操作
+2. 重新读取目标文件的最新内容
+3. 将最新内容重新纳入 LLM 上下文
+4. 基于最新内容重新生成编辑方案
+
+EffectLog 不依赖持久化存储——MemoryQueue 阶段也记录 EffectLog，但仅在进程内存中。Pod 重启后丢失，但 RedisQueue 阶段会持久化到 PG。
 
 ### Memory 系统
 
