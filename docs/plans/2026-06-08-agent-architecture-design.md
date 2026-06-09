@@ -92,6 +92,7 @@ PENDING ──→ RUNNING ──→ SUCCEEDED
 | `message_chunk` | `{content, task_id}` | 最终回答逐字输出 |
 | `task_status` | `{task_id, status}` | 子任务状态变更 |
 | `done` | `{session_id}` | 全部处理完成 |
+| `iteration_exhausted` | `{session_id, failed_subtask_ids, trajectory_paths}` | 迭代预算耗尽，需要用户介入 |
 
 > 所有事件统一携带 `task_id`，即使简单路径（react_node）也携带 `task_id="root"` 保证协议一致。`agent_plan` 替换为 `session_id` 因为计划不归属特定子任务。
 
@@ -128,131 +129,166 @@ input → [router] → simple → [react_node] → output
 2. 部分 FAILED → 标记下游 CANCELLED → 对已执行的副作用任务执行 compensation → 返回错误汇总
 3. Collector Check 发现矛盾 → 触发 Planner 重新生成或调度新的 subtask
 
-### Checker 子系统（Worker 维度和 Collector 维度）
+### Checker 子系统（基于轨迹的反馈循环）
 
 #### 设计思想
 
-本质上是简化的 Trajectory RL（轨迹强化学习）。不依赖复杂训练流程，而是：
+本质上是在 ReAct 范式基础上增加 Observe（验证）环节，形成完整的 Think → Act → Observe 闭环。不依赖复杂训练流程，而是：
 1. 每次执行留下完整轨迹（本地文件）
-2. Worker 执行完后 Check，Check 失败后用 LLM 判断是"计划错了"还是"执行错了"
+2. Worker 执行完后 Check，Check 失败后用**规则优先、LLM 兜底**的方式判断失败类型
 3. 判断结果决定下一步：修正执行 or 重新计划
 4. 超限后用户介入
 
 #### Rubric 定义
 
-每个 Subtask 由 Planner 在生成时附带评分标准：
+每个 Subtask 由 Planner 在生成时附带评分标准。Rubric 使用结构化字段而非字符串前缀约定：
 
 ```python
 @dataclass
+class Criterion:
+    """单个评判标准"""
+    text: str                           # 标准描述，如 "README.md 文件已创建"
+    check_type: Literal["rule", "llm"]  # "rule" 用代码校验，"llm" 走 LLM 评判
+
+@dataclass
 class Rubric:
     """评分标准 — 判断 subtask 是否完成的标准"""
-    criteria: list[str]                # ["报告覆盖了所有要求的部分",
-                                       #  "没有事实性错误",
-                                       #  "README.md 已正确写入磁盘"]
-    min_pass_score: float = 0.8       # 80%
+    criteria: list[Criterion]           # 评判标准列表
+    require_all_pass: bool = True       # True=全部通过才算通过，False=多数通过即可
 
     @property
     def is_rule_only(self) -> bool:
-        """如果所有标准都可以通过规则（非 LLM）判定，则为纯规则模式"""
-        return all(not c.startswith("#LLM") for c in self.criteria)
+        """是否全部走规则检查（无需 LLM 调用）"""
+        return all(c.check_type == "rule" for c in self.criteria)
 ```
 
-Planner 的 prompt 要求为每个 subtask 生成 rubric。例：
+Planner 的 prompt 要求为每个 subtask 同时生成任务描述和对应的 rubric：
 
 ```
 Subtask: "分析项目结构并生成 README.md"
 Rubric:
-  - README.md 文件已创建在项目根目录
-  - 内容包含项目名称和功能描述
-  - #LLM 项目架构描述与实际代码结构一致
-  - #LLM README 的示例用法与实际 API 匹配
+  - [rule] README.md 文件已创建在项目根目录
+  - [rule] 内容包含项目名称和功能描述
+  - [llm] 项目架构描述与实际代码结构一致
+  - [llm] README 的示例用法与实际 API 匹配
 
-带 #LLM 前缀的走 LLM 检查，不带的走规则检查。
+[rule] 走代码规则检查，[llm] 走 LLM 评判。
 ```
+
+#### Rubric 验证
+
+Planner 生成的 Rubric 可能和任务需求不匹配，需要在投入使用前进行独立验证：
+
+```python
+class RubricValidator:
+    """验证 Rubric 是否合理、是否覆盖了任务的关键方面"""
+
+    def validate(
+        self,
+        subtask: Subtask,
+        rubric: Rubric,
+        user_request: str,
+    ) -> list[str]:
+        """返回需要修正的问题列表，空列表表示通过"""
+        ...
+```
+
+- 检查 Rubric 是否有足够的标准覆盖 subtask 的描述
+- 检查 Rubric 不全是 `[rule]`——纯工具操作类 subtask 除外
+- 检查标准描述是否可判定（是否存在模糊表述）
+- 对有意义的标准，可以用 LLM 做快速合理性判断
+
+如果验证发现问题，返回给 Planner 重新生成。验证节点确保 Rubric 有足够的质量来驱动后续的 Check 流程。
 
 #### Check 路由
 
+Check 路由不依赖工具名，而是基于 Rubric 自身的 `is_rule_only` 属性：
+
 ```python
 class Checker:
-    """按 subtask 类型路由到对应的 check 方式"""
-
-    RULE_ONLY_TOOLS = {"read_file", "run_shell", "file_edit",
-                       "file_write", "grep", "glob", "web_search"}
+    """按 Rubric 的 check_type 路由到对应的 check 方式"""
 
     def check(self, subtask: Subtask, result: str) -> CheckResult:
-        check_type = self._determine_check_type(subtask)
-        if check_type == "rule":
+        if subtask.rubric.is_rule_only:
             return self._rule_check(subtask, result)
-        elif check_type == "rubric_llm":
+        else:
             return self._rubric_llm_check(subtask, result)
+
+    def _rule_check(self, subtask: Subtask, result: str) -> CheckResult:
+        """规则检查：exit code、文件存在、非空等硬约束。不调 LLM。"""
+
+    def _rubric_llm_check(self, subtask: Subtask, result: str) -> CheckResult:
+        """Rubric + LLM 检查：把 subtask 描述 + rubric + result 喂给 LLM。
+        对每条标准评分：PASS / FAIL"""
+        # 注意：不再使用 CONFUSED 分值。只有 PASS 或 FAIL。
+        # 通过评分函数计算是否满足 require_all_pass
 ```
 
-- **规则检查**：exit code、文件存在、非空等硬约束。通过则 PASS，不通过则 FAIL + 具体原因
-- **Rubric + LLM 检查**：subtask 有 `#LLM` 标准时，把 subtask 描述 + rubric + result 喂给 LLM，逐条打分。每条返回 PASS/CONFUSED/FAIL
+- **规则检查**：exit code=0、文件存在、内容非空等可编码的硬约束。通过则 PASS，不通过则 FAIL + 具体原因
+- **Rubric + LLM 检查**：subtask 有 `check_type="llm"` 标准时，把 subtask 描述 + rubric + result 喂给 LLM，逐条评分（PASS/FAIL），按 `require_all_pass` 判定是否通过
 
 #### Check 失败 → 反馈循环（核心闭环）
 
 ```
 Worker 执行完 subtask
   → [Checker.check()] 失败
-  → 打包 Checker 包：
+  → 打包 CheckerFeedback：
       {
         "subtask": {id, description, rubric, tools_needed},
-        "check_result": {score, failed_criteria, feedback},
+        "check_result": {failed_criteria, check_feedback},
         "result": result,                    # 执行结果
         "user_request": original_user_input
       }
+  → 失败分类（规则优先，LLM 兜底）：
+      ├─ timeout → "planning"（任务定义可能不合理）
+      ├─ exit code 非零 → "execution"（执行出问题了）
+      ├─ 输出为空 → "execution"
+      └─ 其他 → LLM 判断
   → 判断失败类型：
-      ├─ "执行层面": 修正指导 + 重新入队 (retry_count + 1)
-      └─ "计划层面": 重新入队，触发 Planner 重新生成受影响部分
-  → retry_count > max_retries → 用户介入
+      ├─ "execution": 打包 CheckerFeedback + 修正指导 → 重新入队 (retry_count + 1)
+      └─ "planning": 打包 CheckerFeedback → 触发 Planner 重新生成该 subtask
+  → retry_count 超过 per_subtask_max 或全局超过 global_max
+     → SSE 推送 iteration_exhausted → 用户介入
 ```
 
-**轨迹文件（Trajectory File）：**
+**失败分类规则优先于 LLM：** timeout 必然意味着当前 subtask 的范围不合理（planning 问题），exit code 非零说明执行有问题（execution 问题），输出为空也可能是 execution。只有这些规则都判不了时，才调用 LLM 做分类。这样保证了控制流的确定性，LLM 只负责处理规则边界处的模糊情况。
 
-每个 subtask 的执行轨迹按以下格式写入本地文件：
+#### 轨迹文件（Trajectory File）
+
+每个 subtask 的执行轨迹流式追加写入本地文件：
 
 ```
-# .nanoclaw/trajectories/{session_id}/{subtask_id}.jsonl
+.nanoclaw/trajectories/{session_id}/{subtask_id}.jsonl
 
-{ "role": "system", "content": "subtask 描述、rubric" }
-{ "role": "user", "content": "原始需求" }
-{ "role": "step", "step": 1, "type": "think", "content": "..." }
-{ "role": "step", "step": 1, "type": "action", "tool": "read_file", "args": {...} }
-{ "role": "step", "step": 1, "type": "observation", "result": "..." }
-...
+{"step": 1, "type": "think", "content": "..."}
+{"step": 1, "type": "action", "tool": "read_file", "args": {...}}
+{"step": 1, "type": "observation", "result": "..."}
 ```
 
 轨迹文件的两个作用：
-1. Check 失败时如果传入的 trace 超过 N 步，告知 Agent 自行去文件读取完整轨迹
+1. Check 失败时代理直接读取文件获取完整的执行轨迹（不截断、不预览）
 2. 未来 Trajectory RL 的数据基础
 
 ```python
 class TrajectoryLogger:
-    """将执行轨迹写入本地 JSONL 文件"""
+    """将执行轨迹流式写入本地 JSONL 文件"""
 
-    def __init__(self, base_dir: str):
+    def __init__(self, base_dir: str) -> None:
         self.base_dir = Path(base_dir) / "trajectories"
 
-    async def append_step(
-        self,
-        session_id: str,
-        subtask_id: str,
-        step: dict,
-    ) -> None:
-        """追加一步到轨迹文件"""
+    async def append_step(self, session_id: str, subtask_id: str, step: dict) -> None:
+        """追加一步到轨迹文件（O(1) 磁盘操作）"""
 
-    async def read_trajectory(
-        self,
-        session_id: str,
-        subtask_id: str,
-        max_steps: int = 20,
-    ) -> list[dict]:
-        """读取轨迹。如果超过 max_steps 步，只返回前 max_steps 步
-        和一个提示 '完整轨迹可到 {path} 查看'"""
+    async def read_full(self, session_id: str, subtask_id: str) -> list[dict]:
+        """读取完整轨迹。用于失败分类时 LLM 直接读取。"""
+
+    async def cleanup(self, session_id: str, ttl_days: int = 30) -> None:
+        """清理超过 TTL 的轨迹文件"""
 ```
 
-#### 追踪包结构（Checker 失败时传给 LLM 的完整上下文）
+**不截断**：轨迹文件的流式追加是 O(1)/步，读取也是按需一次读。不需要截断预览。分类 LLM 通过 `read_full()` 直接读取完整轨迹，保留所有上下文。因为分类只在 check 失败时才触发（不是每个 subtask 都会发生），总 IO 开销可控。
+
+#### CheckerFeedback（失败时传给 LLM 的完整上下文）
 
 ```python
 @dataclass
@@ -262,78 +298,105 @@ class CheckerFeedback:
     rubric: Rubric
     result: str
     check_result: CheckResult          # 哪些标准没通过 + 为什么
-    trace_preview: list[Step]          # 最近的 N 步轨迹
-    trace_full_path: str | None        # 轨迹文件路径
+    trace_path: str                    # 轨迹文件路径（LLM 自行读取）
     user_request: str                  # 用户原始需求
-    failure_hint: str                  # "execution" 或 "planning" — LLM 判断
 ```
 
-#### 两层级联上限（方案 C）
+注意：`failure_hint` 不再出现在 CheckerFeedback 中。失败分类是 Worker 流程中的局部变量，不跨越模块边界。如果需要在日志中记录分类结果，使用 EventLogger。
+
+#### 两层级联上限
 
 ```python
 class IterationBudget:
-    """两层级联的迭代次数管控"""
+    """两层级联的迭代次数管控。使用锁保护并发访问。"""
 
     def __init__(
         self,
         per_subtask_max: int = 3,     # 单个 subtask 最多重试 3 次
         global_max: int = 10,         # 全局所有 retry+replan 最多 10 次
-    ):
+    ) -> None:
         self.per_subtask_max = per_subtask_max
         self.global_max = global_max
-        self.per_subtask_counts: dict[str, int] = {}
-        self.global_count = 0
+        self._per_subtask_counts: dict[str, int] = {}
+        self._global_count = 0
+        self._lock = asyncio.Lock()
 
-    def try_consume(self, subtask_id: str) -> bool:
-        """尝试消耗一次迭代机会，返回是否允许继续"""
-        if self.global_count >= self.global_max:
-            return False               # 全局上限已到，不可继续
-        subtask_count = self.per_subtask_counts.get(subtask_id, 0)
-        if subtask_count >= self.per_subtask_max:
-            return False               # subtask 上限已到
-        self.per_subtask_counts[subtask_id] = subtask_count + 1
-        self.global_count += 1
-        return True
-
-    def exhausted(self) -> bool:
-        """是否已经接近上限（用于告警）"""
-        return (self.global_count >= self.global_max - 1
-                or any(c >= self.per_subtask_max - 1
-                       for c in self.per_subtask_counts.values()))
+    async def try_consume(self, subtask_id: str) -> bool:
+        """尝试消耗一次迭代机会，返回是否允许继续。
+        此方法为权威决策者，不提供外部 exhaust 检查。"""
+        async with self._lock:
+            if self._global_count >= self.global_max:
+                return False           # 全局上限已到
+            subtask_count = self._per_subtask_counts.get(subtask_id, 0)
+            if subtask_count >= self.per_subtask_max:
+                return False           # subtask 上限已到
+            self._per_subtask_counts[subtask_id] = subtask_count + 1
+            self._global_count += 1
+            return True
 ```
 
-当任意上限耗尽 → SSE 推送 `iteration_exhausted` 事件 → 用户收到通知 → 展示当前失败状态 + 轨迹文件路径 → 用户可手动调整后继续。
+- `try_consume()` 是唯一的上限检查方法。它在内部加锁，保证并发安全
+- 当 `try_consume()` 返回 `False` 时，SSE 推送 `iteration_exhausted` 事件
+- 用户收到通知 → 展示当前失败状态 + 轨迹文件路径 → 用户可手动调整后继续
+
+#### Planner 重新生成（接收失败上下文）
+
+当失败分类判定为 "planning" 时，Planner 不再以原始需求为唯一输入，而是接收完整的 CheckerFeedback：
+
+```
+[Planner 重规划路径]
+  → 输入：用户原始需求 + CheckerFeedback + 当前 TaskPlan
+  → 输出：被替换的 subtask（仅重新生成受影响的部分，不重做整个 DAG）
+  → 验证：经过 validate_plan()
+  → 入队 Dispatch → Worker 重新 pick up
+```
+
+这样 Planner 知道哪个 subtask 失败了、为什么失败、以及已有的执行轨迹，可以针对性地修正而非盲目重新生成。
 
 #### Worker 内部执行流程（更新后）
 
 ```
 Worker 从 TaskQueue dequeue() → Subtask
-  → ReAct 循环执行（写 trace 到 Step 和轨迹文件）
+  → ReAct 循环执行（写 trace 到 Step 和 TrajectoryLogger）
   → 执行完毕 → 得到 result
   → [Checker.check()]：
       ├─ PASS → TaskQueue.complete(id, result)
-      └─ FAIL → 打包 CheckerFeedback + 调用 LLM 判断失败类型
-                 ├─ "execution" → 带修正指导重新入队 (retry_count+1)
-                 └─ "planning"  → 触发 Planner 重新生成该 subtask
-  → retry_count 超过 per_subtask_max 或全局超过 global_max
+      └─ FAIL → 失败分类（规则优先 → LLM 兜底）
+                 ├─ "execution" → 打包 CheckerFeedback + 修正指导 → 重新入队
+                 └─ "planning"  → CheckerFeedback → re-plan 该 subtask
+  → IterationBudget.try_consume() 返回 False
      → SSE 推送 iteration_exhausted → 用户介入
 ```
 
 #### Collector 侧（更新后）
 
+Collector 收到所有 subtask 结果后，不做完整的语义重检查，仅做**共享资源矛盾检测**：
+
 ```
 Collector 收到所有 subtask 结果
-  → [检查]：
-      ├─ 一致性检查：subtask 结果之间有没有矛盾
-      ├─ 完整性检查：所有依赖是否覆盖
-      └─ 整体目标检查：Planner 的原始目标是否达成
-  → 全部通过 → 汇总输出
-  → 有失败 → 打包失败上下文 → 触发 Planner 修复或补调度
-           → 计全局迭代次数
-           → 超限 → 用户介入
+  → 检测共享资源矛盾：
+      ├─ 两个 Worker 同时写入了同一文件的不同版本
+      ├─ 一个 Worker 删除了另一个 Worker 正在读取的文件
+      └─ Subtask 之间有缺失的依赖链路
+  → 有矛盾 → 触发 Planner 修复或补调度（带矛盾上下文）
+          → 计全局迭代次数
+          → 超限 → 用户介入
+  → 无矛盾 → 汇总输出
 ```
 
-该实现是 Trajectory RL 的初级阶段——不依赖训练流程，而是用轨迹文件 + LLM 多轮反馈实现自我修正。轨迹文件同时也为未来高阶 RL 提供数据基础。
+限定检查范围到"共享资源"而非"语义正确性"，因为语义正确性已经在 Worker 侧的 Rubric check 中和 Collector 之前的所有步骤中覆盖了。Collector 不需要重新评估整个任务的语义含义。
+
+#### SSE 事件协议（补充）
+
+在之前的 SSE 事件表中补充：
+
+| 事件 | 载荷 | 触发时机 |
+|------|------|---------|
+| `iteration_exhausted` | `{session_id, failed_subtask_ids, trajectory_paths}` | 迭代预算耗尽，需要用户介入 |
+
+该事件的触发结果是让用户选择：
+1. 放弃当前任务（CANCEL）
+2. 调整参数后继续（RESUME）
 
 ### Worker Pool
 
