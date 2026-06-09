@@ -19,7 +19,7 @@
 
 **原因**：所有模块都依赖这些模型，必须先定义。注意：Phase 1 还不使用 Subtask/TaskPlan/EffectLogEntry（这些在 Phase 2 才活跃），但需要定义好以便 import 不报错。
 
-**Step 1: 定义 model/chat.py**
+**第 1 步： 定义 model/chat.py**
 
 - `ChatMessage`：现有结构 `{content: str, role: str}`，但需要扩展 metadata 字段供后续使用
 - `Step`：ReAct 每一步的记录，详见设计文档
@@ -65,7 +65,7 @@ git commit -m "feat: define data models for Phase 1"
 
 **原因**：Phase 1 只实现 Memory 版本（进程内 dict），但这些接口必须在 Phase 1 定义好，后续 Phase 加 PG 实现时不需要改调用方代码。这是"Mock-and-Swap"策略。
 
-**Step 1: 实现 SessionRepository**
+**第 1 步： 实现 SessionRepository**
 
 接口方法（详见设计文档）：
 - `create(session) -> Session`
@@ -129,7 +129,7 @@ git commit -m "feat: add storage abstractions and Memory implementations"
 
 **原因**：当前的 AgentState 只有 `messages` 字段。Phase 1 的 ReAct 图需要更多的状态字段。
 
-**Step 1: 扩展 AgentState**
+**第 1 步： 扩展 AgentState**
 
 ```python
 class AgentState(TypedDict):
@@ -165,7 +165,7 @@ git commit -m "feat: extend AgentState with tool_registry and session fields"
 
 **原因**：ReAct 是核心循环，Phase 1 只走简单路径（不经过 planner/dispatch/await/collect）。同时也是 Phase 2 Worker 的内部实现——同一个图。
 
-**Step 1: 理解 ReAct 结构**
+**第 1 步： 理解 ReAct 结构**
 
 ReAct 是一个 LangGraph `StateGraph`，内部组成：
 
@@ -256,7 +256,7 @@ git commit -m "feat: add base ReAct LangGraph with async LLM"
 
 **原因**：简单路径的用户入口。只包含 Router + ReAct Node，不涉及 planner/dispatch/collect。
 
-**Step 1: 实现 Router 节点（启发式优先）**
+**第 1 步： 实现 Router 节点（启发式优先）**
 
 Router 判断输入是"简单"还是"复杂"（Phase 1 永远走简单路径，但接口保留）：
 
@@ -315,7 +315,7 @@ git commit -m "feat: add supervisor graph with heuristic router"
 
 **原因**：当前 /chat/stream 是 mock SSE（人工构造字符串）。Phase 1 需要替换为真实的 LangGraph 执行 + SSE 协议。
 
-**Step 1: 理解新的 SSE 事件格式**
+**第 1 步： 理解新的 SSE 事件格式**
 
 设计文档规定所有事件携带 task_id（简单路径用 "root"）：
 
@@ -361,8 +361,8 @@ def get_session_repo() -> SessionRepository:
 
 ```python
 @app.post("/chat/stream")
-async def chat_stream(req: ChatRequest):
-    async def event_generator():
+async def chat_stream(req: ChatRequest) -> EventSourceResponse:
+    async def event_generator() -> AsyncGenerator[dict, None]:
         # 1. 创建 session
         session = await session_repo.create(Session(...))
         yield {"event": "task_status", "data": json.dumps({"task_id": "root", "status": "RUNNING"})}
@@ -419,7 +419,7 @@ git commit -m "feat: wire /chat/stream to ReAct graph with SSE protocol"
 
 **原因**：当前 TUI 只展示最终回答（message_chunk）。Phase 1 需要展示 ReAct 中间过程（think/action/observation），用户能看到 Agent 在思考什么、调用了什么工具、结果是什么。
 
-**Step 1: 扩展 types.ts**
+**第 1 步： 扩展 types.ts**
 
 添加 SSE 事件相关类型：
 
@@ -537,7 +537,7 @@ git commit -m "feat: display ReAct steps in TUI with ThinkingBlock and ToolCallC
 **文件**：
 - 创建：`backend/src/nanoclaw/server/app.py` 中添加错误处理
 
-**Step 1: 添加 SSE 错误事件**
+**第 1 步： 添加 SSE 错误事件**
 
 当 ReAct 图执行异常时，发送 error 事件：
 
