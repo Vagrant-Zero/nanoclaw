@@ -629,46 +629,69 @@ class MemoryQueue(TaskQueue):
 
 **核心原则：`tools` 参数永远不变，前缀稳定 → KV cache 完美命中。**
 
-参考 Manus 实践：避免在迭代过程中动态添加或移除工具。工具定义位于上下文前部（system prompt 之后），任何更改都会使后续所有 action/observation 的 KV cache 失效（10 倍成本差距）。
+参考 Manus 实践（2025/07 "Context Engineering for AI Agents"）：
+
+> 避免在迭代过程中动态添加或移除工具。工具定义位于上下文前部（system prompt 之后），任何更改都会使后续所有 action/observation 的 KV cache 失效（10 倍成本差距）。
+
+##### Manus 的三层约束方案（参考）
+
+Manus 用三层组合实现"不改 tools 但约束工具选择"：
 
 ```
-┌─────────────────────────────────────────────────────┐
-│  System Prompt        ← 永远不变                     │ ← KV cache 前缀
-│  Tools Schema (全集)   ← 永远不变                     │
-├─────────────────────────────────────────────────────┤
-│  Messages (对话历史)   ← 动态追加                     │ ← cache miss 区域
-│    HumanMessage("...")                              │
-│    AIMessage(content="", tool_calls=[...])          │
-│    ToolMessage(content="...", tool_call_id="...")   │
-│    ...                                              │
-└─────────────────────────────────────────────────────┘
+第 1 层：工具命名规范（前缀分组）
+  browser_navigate   browser_click   browser_screenshot
+  shell_run          shell_exec
+  file_read          file_write      file_edit
+
+第 2 层：状态机决定"当前阶段允许哪组"
+  当前在"浏览网页"阶段 → 只允许 browser_* 组
+
+第 3 层：Response prefill 到前缀
+  预填 assistant{"name": "browser_  → LLM 必须补全这个前缀
+  → LLM 可从 browser_navigate / browser_click / browser_screenshot 中自选
+  → 既约束范围，又保留选择灵活性
 ```
 
-**架构决策（2026-06-11 验证）**：
+> **关键**：prefill 的是**前缀**（`"browser_`），不是完整工具名。LLM 仍然有选择权，但被限制在组内。比 `auto`（15 选 1）精准，比 `named tool`（1 个指定无选择）灵活。
 
-| 选项 | `tools` 参数 | 约束方式 | KV Cache | 选择 |
+> **为什么我们现在做不了**：Manus 的 prefill / logit mask 依赖自托管模型（vLLM）。DeepSeek 托管 API 当前不暴露 `allowed_tools`、response prefill 或 guided decoding。参见下方实测结果。
+
+##### 当前可用方案（2026-06-11 实测）
+
+DeepSeek 原生 API（`https://api.deepseek.com/chat/completions`）实测：
+
+| `tool_choice` | 效果 | 状态 |
+|---------------|------|------|
+| `"auto"` | 模型从全集中自选 | ✓ 可用 |
+| `"required"` | 必须调工具，从全集中任选 | ✓ 可用 |
+| `{"type": "function", "function": {"name": "xxx"}}` | 强制指定一个工具 | ✓ 可用（但不可独用，见下文） |
+| `{"type": "allowed_tools", "allowed_tools": [...]}` | 白名单约束 | ✗ DeepSeek 返回 `unknown variant` |
+
+##### 为什么 `named tool` 不能独立使用
+
+`tool_choice: {"type": "function", "function": {"name": "read_file"}}` 强制 LLM 调用 `read_file`，但**没有人预先知道该调哪个工具**——如果 Planner 能精确到这一步，那就不需要 ReAct Worker 了。所以 `named tool` 只在以下场景有意义：
+
+- Planner 已精确规划每一步的工具（粒度远超当前设计）
+- 确定性步骤（如"最后一步必然是 file_write"）
+
+对于有选择空间的 ReAct 步骤，`named tool` 等同于跳过 LLM 的判断——选对了省 token，选错了必失败。**不可作为通用约束方案。**
+
+##### 当前决策
+
+| 选项 | `tools` 参数 | 约束方式 | KV Cache | 适用 |
 |------|-------------|---------|----------|------|
-| A: 全量 + `auto` | 全集不动 | LLM 自选 | 完美命中 | **Phase 1** |
-| B: 全量 + `required` | 全集不动 | 强制调工具 | 完美命中 | **Phase 2 fallback** |
-| C: 全量 + named tool | 全集不动 | 每步指定工具名 | 完美命中 | **Phase 2 优化** |
+| A: 全量 + `auto` + 消息引导 | 全集不动 | LLM 自选 | 完美命中 | **Phase 1** |
+| B: 全量 + `required` | 全集不动 | 强制调工具 | 完美命中 | Phase 2 fallback |
+| C: 全量 + `auto` + 前缀组 + prefill | 全集不动 | logit mask | 完美命中 | 需自托管模型 |
 | D: 动态过滤 tools | 每阶段变 | 只传子集 | **全失效** ✕ | **弃用** |
 
-**DeepSeek 实测（2026-06-11）**：
+**Phase 1 策略（方案 A）**：graph 编译时注册全量 tools，`tool_choice: "auto"`，LLM 自选。Worker 启动时在 messages 尾部追加阶段引导（如 "当前阶段使用 browser_* 工具"），不破 cache。选错 → Checker 检测 → 重试。
 
-- `tool_choice: "auto"` — 模型从全集中自选 ✓
-- `tool_choice: "required"` — 必须调工具，从全集中任选 ✓
-- `tool_choice: {"type": "function", "function": {"name": "xxx"}}` — 强制指定一个工具 ✓
-- `tool_choice: {"type": "allowed_tools", "allowed_tools": [...]}` — **不支持** ✗（DeepSeek 原生 API 返回 `unknown variant 'allowed_tools'`）
-
-> **注意**：OpenAI SDK 类型定义中已有 `allowed_tools`（白名单模式），未来如 DeepSeek 支持，可升级到选项 C+。
-
-**Phase 1 策略（方案 A）**：graph 编译时注册全量 tools，`tool_choice: "auto"`，LLM 自选。如选错 → Checker 检测 → 重试。
-
-**Phase 2 优化策略**：
-
-- 方案 B（`required`）：保证至少调一次工具，用于需要执行动作的 subtask
-- 方案 C（named tool）：Planner 产出的 subtask 已预设工具 → Worker 直接传 `tool_choice: {"type": "function", "function": {"name": "read_file"}}` 精确约束；对于需要多工具选择的步骤用 B 兜底
-- 工具命名约定（参考 Manus）：同类工具共享前缀（如 `file_read`、`file_write`、`shell_run`），未来自托管模型时可用 guided decoding 按前缀白名单约束
+**Phase 2+ 优化路径**：
+- 方案 B（`required`）：保证至少调一次工具，用于必须执行动作的 subtask
+- 工具命名约定（参考 Manus）：同类工具共享前缀（如 `file_read`、`file_write`、`shell_run`）
+- 未来 DeepSeek 支持 `allowed_tools` 或自托管模型时，升级到方案 C（前缀 prefill 约束）
+- `named tool` 仅用于确定性步骤（如 subtask 最后一步写文件），不作为通用约束手段
 
 ### 全局路径配置
 
