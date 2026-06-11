@@ -1,5 +1,6 @@
 .venv
 backend/.venv/*
+backend/.env
 backend/.gitignore
 backend/.python-version
 cli/node_modules

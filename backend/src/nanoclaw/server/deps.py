@@ -27,8 +27,8 @@ def get_llm() -> Any:
     """
     return ChatOpenAI(
         model=settings.llm_model,
-        api_key=settings.openai_api_key or "sk-not-configured",
-        base_url="https://api.deepseek.com",
+        api_key=settings.openai_api_key,
+        base_url=settings.llm_base_url,
         temperature=0.7,
     )
 

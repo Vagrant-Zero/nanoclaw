@@ -579,14 +579,13 @@ git commit -am "fix: add error handling and timeout to ReAct execution"
 
 ### Phase 1 完成检查清单
 
-- [ ] 数据模型全部定义（models/chat.py, models/task.py）
-- [ ] 存储抽象全部定义（session_repo.py, task_repo.py, task_queue.py）
-- [ ] AgentState 扩展（session_id, task_id, session_repo）
-- [ ] ReAct 图可构建（react_agent.py）
-- [ ] Supervisor 简单路径可运行（supervisor_graph.py）
-- [ ] /chat/stream 走 ReAct 图 + SSE 协议
-- [ ] TUI 展示 ThinkingBlock
-- [ ] TUI 展示 ToolCallCard
-- [ ] 所有 LLM 调用使用 .ainvoke()
-- [ ] 错误处理和超时保护
-- [ ] 端到端可运行
+- [x] 数据模型全部定义（models/chat.py, models/task.py）
+- [x] 存储抽象全部定义（session_repo.py, task_repo.py, task_queue.py）
+- [x] AgentState 扩展（session_id, task_id, session_repo）
+- [x] ReAct 图可构建（react_agent.py）
+- [x] Supervisor 简单路径可运行（supervisor_graph.py）
+- [x] /chat/stream 走 ReAct 图 + SSE 协议 + 错误处理
+- [x] TUI 展示 ThinkingBlock
+- [x] TUI 展示 ToolCallCard
+- [x] 所有 LLM 调用使用 .ainvoke() + asyncio.timeout(30)
+- [x] 端到端可运行（9 tests passing incl. E2E）

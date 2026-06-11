@@ -528,6 +528,7 @@ dependencies = [
     { name = "langchain-openai" },
     { name = "langgraph" },
     { name = "pydantic-settings" },
+    { name = "python-dotenv" },
     { name = "sse-starlette" },
     { name = "uvicorn", extra = ["standard"] },
 ]
@@ -548,6 +549,7 @@ requires-dist = [
     { name = "langchain-openai", specifier = ">=0.3" },
     { name = "langgraph", specifier = ">=0.4" },
     { name = "pydantic-settings", specifier = ">=2.7" },
+    { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "sse-starlette", specifier = ">=2.2" },
     { name = "uvicorn", extras = ["standard"], specifier = ">=0.34" },
 ]

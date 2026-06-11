@@ -11,8 +11,11 @@ interface Props {
 }
 
 /**
- * Opens an SSE stream to /chat/stream, parses the new protocol events,
- * and calls the provided callbacks so the parent can render ReAct steps.
+ * Opens an SSE stream to /chat/stream, parses the protocol events.
+ *
+ * - agent_think / agent_action / agent_observation → forwarded as callbacks
+ * - message_chunk → rendered inline as streaming answer text
+ * - onDone fires with the accumulated answer text on stream completion
  */
 export function StreamingChat({
   baseUrl,

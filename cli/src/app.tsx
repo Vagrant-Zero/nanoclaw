@@ -11,13 +11,10 @@ import { ToolCallCard } from "./components/ToolCallCard.js";
 
 const config = await loadConfig();
 
-/** Intermediate ReAct step (think / action / observation) */
-interface ReActStep {
-  type: "think" | "action" | "observation";
-  content?: string; // think text
-  tool?: string; // action / observation
-  args?: Record<string, unknown>; // action
-  result?: string; // observation
+interface ToolCallState {
+  tool: string;
+  args: Record<string, unknown>;
+  result?: string;
 }
 
 function App() {
@@ -26,22 +23,15 @@ function App() {
   }, []);
 
   const [messages, setMessages] = useState<ChatMessage[]>([]);
-  const [reactSteps, setReactSteps] = useState<ReActStep[]>([]);
+  const [thinkText, setThinkText] = useState<string>("");
+  const [toolCalls, setToolCalls] = useState<ToolCallState[]>([]);
   const [streamingMsg, setStreamingMsg] = useState<string | null>(null);
   const [exiting, setExiting] = useState(false);
-
-  // exercise
-  const [count, setCount] = useState<number>(0);
   const [input, setInput] = useState<string>("");
 
-  useInput((data, key) => {
+  useInput((_data, key) => {
     if (key.escape) {
       process.exit(0);
-    }
-    if (data === "r") {
-      setCount(0);
-    } else {
-      setCount(count + 1);
     }
   });
 
@@ -51,14 +41,11 @@ function App() {
       setTimeout(() => process.exit(0), 100);
       return;
     }
-    setMessages([...messages, { content: value, role: "user" }]);
-    setReactSteps([]); // new request → clear previous steps
+    setMessages((prev) => [...prev, { content: value, role: "user" }]);
+    setThinkText("");
+    setToolCalls([]);
     setStreamingMsg(value);
     setInput("");
-  };
-
-  const addStep = (step: ReActStep) => {
-    setReactSteps((prev) => [...prev, step]);
   };
 
   const handleStreamDone = (fullText: string) => {
@@ -72,52 +59,43 @@ function App() {
         Nanoclaw cli
       </Text>
       <Text dimColor>Type /exit to quit</Text>
-      <Text dimColor>Messages: {messages.length}</Text>
 
       {/* User + assistant messages */}
       {messages.map((msg, i) => (
         <MessageBubble key={i} content={msg.content} role={msg.role} />
       ))}
 
-      {/* ReAct step stream for the current request */}
-      {reactSteps.length > 0 && (
-        <Box flexDirection="column">
-          <Text dimColor>steps [{reactSteps.length}]</Text>
-          {reactSteps.map((step, i) =>
-            step.type === "think" ? (
-              <ThinkingBlock key={i} content={step.content ?? ""} />
-            ) : step.type === "action" ? (
-              <ToolCallCard
-                key={i}
-                tool={step.tool ?? "?"}
-                args={step.args ?? {}}
-              />
-            ) : step.type === "observation" ? (
-              <ToolCallCard
-                key={i}
-                tool={step.tool ?? "?"}
-                args={{}}
-                result={step.result ?? ""}
-              />
-            ) : null
-          )}
-        </Box>
-      )}
+      {/* Thinking text — single block, cumulative */}
+      {thinkText.length > 0 && <ThinkingBlock content={thinkText} />}
 
-      <Text dimColor>count: {count}</Text>
+      {/* Tool call cards */}
+      {toolCalls.map((tc, i) => (
+        <ToolCallCard
+          key={i}
+          tool={tc.tool}
+          args={tc.args}
+          result={tc.result}
+        />
+      ))}
 
-      {/* Streaming chat (wires up ReAct callbacks) */}
+      {/* Streaming chat */}
       {streamingMsg && (
         <StreamingChat
           baseUrl={config.baseUrl}
           message={streamingMsg}
           onDone={handleStreamDone}
-          onThink={(content) => addStep({ type: "think", content })}
+          onThink={(content) => setThinkText((prev) => prev + content)}
           onAction={(tool, args) =>
-            addStep({ type: "action", tool, args })
+            setToolCalls((prev) => [...prev, { tool, args }])
           }
           onObservation={(tool, result) =>
-            addStep({ type: "observation", tool, result })
+            setToolCalls((prev) =>
+              prev.map((tc) =>
+                tc.tool === tool && tc.result === undefined
+                  ? { ...tc, result }
+                  : tc
+              )
+            )
           }
         />
       )}

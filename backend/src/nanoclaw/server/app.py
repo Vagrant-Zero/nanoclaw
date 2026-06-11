@@ -117,57 +117,51 @@ def create_app() -> FastAPI:
             }
 
             try:
-                # Stream graph execution events via astream_events
+                stream_text = ""
+
                 async for event in supervisor.astream_events(
                     initial_state, version="v2"
                 ):
                     kind = event.get("event")
 
-                    if kind == "on_chat_model_start":
-                        # Agent is about to think
-                        pass
-
-                    elif kind == "on_chat_model_stream":
+                    if kind == "on_chat_model_stream":
                         chunk = event["data"]["chunk"]
-                        if hasattr(chunk, "content") and chunk.content:
-                            # Check for tool calls in streaming chunks
-                            # DeepSeek may stream tool calls differently
-                            if isinstance(chunk.content, str):
+                        if hasattr(chunk, "content") and chunk.content and isinstance(chunk.content, str):
+                            stream_text += chunk.content
+                            yield {
+                                "event": "message_chunk",
+                                "data": json.dumps(
+                                    {"content": chunk.content, "task_id": task_id},
+                                    ensure_ascii=False,
+                                ),
+                            }
+
+                    elif kind == "on_chat_model_end":
+                        output = event["data"]["output"]
+                        has_tool_calls = hasattr(output, "tool_calls") and output.tool_calls
+
+                        if has_tool_calls:
+                            # Emit agent_think from accumulated stream text if present
+                            if stream_text:
                                 yield {
                                     "event": "agent_think",
                                     "data": json.dumps(
-                                        {"content": chunk.content, "task_id": task_id},
+                                        {"content": stream_text, "task_id": task_id},
                                         ensure_ascii=False,
                                     ),
                                 }
-
-                    elif kind == "on_chat_model_end":
-                        # LLM turn complete — check if tool calls were made
-                        output = event["data"]["output"]
-                        if hasattr(output, "tool_calls") and output.tool_calls:
                             for tc in output.tool_calls:
                                 tc_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
                                 tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
                                 yield {
                                     "event": "agent_action",
                                     "data": json.dumps(
-                                        {
-                                            "tool": tc_name,
-                                            "args": tc_args,
-                                            "task_id": task_id,
-                                        },
+                                        {"tool": tc_name, "args": tc_args, "task_id": task_id},
                                         ensure_ascii=False,
                                     ),
                                 }
-                        # Stream final content as message_chunk
-                        if hasattr(output, "content") and output.content:
-                            yield {
-                                "event": "message_chunk",
-                                "data": json.dumps(
-                                    {"content": output.content, "task_id": task_id},
-                                    ensure_ascii=False,
-                                ),
-                            }
+
+                        stream_text = ""
 
                     elif kind == "on_tool_start":
                         # Tool execution started

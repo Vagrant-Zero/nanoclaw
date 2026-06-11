@@ -5,7 +5,8 @@
   "type": "module",
   "scripts": {
     "start": "tsx src/index.ts",
-    "chat": "tsx src/index.ts"
+    "chat": "tsx src/index.ts",
+    "test": "npx vitest run src/"
   },
   "dependencies": {
     "@types/react": "^19.2.15",
@@ -16,6 +17,7 @@
   },
   "devDependencies": {
     "@types/node": "^22",
-    "typescript": "^6.0.3"
+    "typescript": "^6.0.3",
+    "vitest": "^4.1.8"
   }
 }

@@ -12,6 +12,7 @@ state pure and serializable. Tools are passed as raw dicts to LLM
 
 from __future__ import annotations
 
+import asyncio
 from typing import Any
 
 from langgraph.graph import END, StateGraph
@@ -19,10 +20,14 @@ from langgraph.graph import END, StateGraph
 from nanoclaw.agent.state import AgentState
 from nanoclaw.tools.registry import ToolRegistry
 
+# Timeout for a single LLM call
+_LLM_TIMEOUT_SECONDS = 30
+
 
 def create_react_agent(
     llm: Any,
     tool_registry: ToolRegistry,
+    llm_timeout: float = _LLM_TIMEOUT_SECONDS,
 ) -> Any:
     """Create a compiled ReAct LangGraph with the given LLM and tools.
 
@@ -41,8 +46,12 @@ def create_react_agent(
     openai_tools = tool_registry.to_openai_dicts()
 
     async def call_model(state: AgentState) -> dict[str, list]:
-        """Invoke the LLM with current message history and available tools."""
-        response = await llm.ainvoke(state["messages"], tools=openai_tools)
+        """Invoke the LLM with current message history and available tools.
+
+        Wrapped in asyncio.timeout to prevent hanging indefinitely.
+        """
+        async with asyncio.timeout(llm_timeout):
+            response = await llm.ainvoke(state["messages"], tools=openai_tools)
         return {"messages": [response]}
 
     def should_continue(state: AgentState) -> str:
