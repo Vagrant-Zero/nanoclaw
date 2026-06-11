@@ -4,7 +4,7 @@
 
 **架构**：Phase 1 只走简单路径（Router → ReAct Node → output），不涉及多任务分解。所有组件设计为后续 Phase 可扩展。
 
-**技术栈**：Python 3.12+，FastAPI，LangGraph，LangChain-Anthropic，Pydantic，uv
+**技术栈**：Python 3.12+，FastAPI，LangGraph，langchain-openai（DeepSeek 兼容 API），Pydantic，uv
 
 **前置阅读**：`docs/plans/2026-06-08-agent-architecture-design.md` 的数据模型、存储抽象、ReAct 图、SSE 协议章节
 
@@ -134,13 +134,14 @@ git commit -m "feat: add storage abstractions and Memory implementations"
 ```python
 class AgentState(TypedDict):
     messages: Annotated[Sequence[AnyMessage], add_messages]
-    tool_registry: ToolRegistry           # 可用工具
     session_id: str | None                # 当前会话 ID
     task_id: str | None                   # "root"（简单路径）或 "task_xxx"
     session_repo: SessionRepository | None # 会话存储引用
 ```
 
-为什么：ReAct Node 需要访问 ToolRegistry 决定调什么工具，需要 session_repo 记录消息历史，需要 task_id 来拼 SSE 事件。
+注意：tools 不在 AgentState 中传递，而是在 `create_react_agent()` 编译时注入。tools 参数在整个 session 生命周期内不变，确保 KV cache 前缀稳定。
+
+为什么：session_repo 记录消息历史，task_id 拼 SSE 事件。tools 通过闭包访问，不在 State 中。
 
 **Step 2: 验证编译**
 
@@ -152,7 +153,7 @@ cd backend && uv run python -c "from nanoclaw.agent.state import AgentState; pri
 
 ```bash
 git add backend/src/nanoclaw/agent/state.py
-git commit -m "feat: extend AgentState with tool_registry and session fields"
+git commit -m "feat: extend AgentState with session fields"
 ```
 
 ---
@@ -580,7 +581,7 @@ git commit -am "fix: add error handling and timeout to ReAct execution"
 
 - [ ] 数据模型全部定义（models/chat.py, models/task.py）
 - [ ] 存储抽象全部定义（session_repo.py, task_repo.py, task_queue.py）
-- [ ] AgentState 扩展（tool_registry, session_id, task_id, session_repo）
+- [ ] AgentState 扩展（session_id, task_id, session_repo）
 - [ ] ReAct 图可构建（react_agent.py）
 - [ ] Supervisor 简单路径可运行（supervisor_graph.py）
 - [ ] /chat/stream 走 ReAct 图 + SSE 协议

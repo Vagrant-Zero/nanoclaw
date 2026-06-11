@@ -619,10 +619,56 @@ class MemoryQueue(TaskQueue):
 
 ### LLM 配置
 
-- **主要提供商**: Anthropic（使用 langchain-anthropic 的 ChatAnthropic）
-- **必须使用异步 API**（`ChatAnthropic.ainvoke()`），禁止使用同步 `.invoke()`，避免阻塞事件循环
-- **配置**: 通过 env `NANOCLAW_LLM_MODEL` / `NANOCLAW_ANTHROPIC_API_KEY` 注入
-- **注入方式**: LangGraph 节点的 State 中包含 LLM 实例引用，或通过依赖注入在构建图时传入
+- **主要提供商**: DeepSeek（OpenAI 兼容 API，使用 langchain-openai 的 ChatOpenAI）
+- **模型**: deepseek-chat（默认），可通过 env `NANOCLAW_LLM_MODEL` 切换
+- **必须使用异步 API**（`.ainvoke()`），禁止使用同步 `.invoke()`，避免阻塞事件循环
+- **配置**: 通过 env `NANOCLAW_LLM_MODEL` / `NANOCLAW_OPENAI_API_KEY` 注入
+- **注入方式**: LangGraph 节点在编译时注入 LLM 实例，不在 State 中传递
+
+#### Tool 管理与 KV Cache 优化
+
+**核心原则：`tools` 参数永远不变，前缀稳定 → KV cache 完美命中。**
+
+参考 Manus 实践：避免在迭代过程中动态添加或移除工具。工具定义位于上下文前部（system prompt 之后），任何更改都会使后续所有 action/observation 的 KV cache 失效（10 倍成本差距）。
+
+```
+┌─────────────────────────────────────────────────────┐
+│  System Prompt        ← 永远不变                     │ ← KV cache 前缀
+│  Tools Schema (全集)   ← 永远不变                     │
+├─────────────────────────────────────────────────────┤
+│  Messages (对话历史)   ← 动态追加                     │ ← cache miss 区域
+│    HumanMessage("...")                              │
+│    AIMessage(content="", tool_calls=[...])          │
+│    ToolMessage(content="...", tool_call_id="...")   │
+│    ...                                              │
+└─────────────────────────────────────────────────────┘
+```
+
+**架构决策（2026-06-11 验证）**：
+
+| 选项 | `tools` 参数 | 约束方式 | KV Cache | 选择 |
+|------|-------------|---------|----------|------|
+| A: 全量 + `auto` | 全集不动 | LLM 自选 | 完美命中 | **Phase 1** |
+| B: 全量 + `required` | 全集不动 | 强制调工具 | 完美命中 | **Phase 2 fallback** |
+| C: 全量 + named tool | 全集不动 | 每步指定工具名 | 完美命中 | **Phase 2 优化** |
+| D: 动态过滤 tools | 每阶段变 | 只传子集 | **全失效** ✕ | **弃用** |
+
+**DeepSeek 实测（2026-06-11）**：
+
+- `tool_choice: "auto"` — 模型从全集中自选 ✓
+- `tool_choice: "required"` — 必须调工具，从全集中任选 ✓
+- `tool_choice: {"type": "function", "function": {"name": "xxx"}}` — 强制指定一个工具 ✓
+- `tool_choice: {"type": "allowed_tools", "allowed_tools": [...]}` — **不支持** ✗（DeepSeek 原生 API 返回 `unknown variant 'allowed_tools'`）
+
+> **注意**：OpenAI SDK 类型定义中已有 `allowed_tools`（白名单模式），未来如 DeepSeek 支持，可升级到选项 C+。
+
+**Phase 1 策略（方案 A）**：graph 编译时注册全量 tools，`tool_choice: "auto"`，LLM 自选。如选错 → Checker 检测 → 重试。
+
+**Phase 2 优化策略**：
+
+- 方案 B（`required`）：保证至少调一次工具，用于需要执行动作的 subtask
+- 方案 C（named tool）：Planner 产出的 subtask 已预设工具 → Worker 直接传 `tool_choice: {"type": "function", "function": {"name": "read_file"}}` 精确约束；对于需要多工具选择的步骤用 B 兜底
+- 工具命名约定（参考 Manus）：同类工具共享前缀（如 `file_read`、`file_write`、`shell_run`），未来自托管模型时可用 guided decoding 按前缀白名单约束
 
 ### 全局路径配置
 
