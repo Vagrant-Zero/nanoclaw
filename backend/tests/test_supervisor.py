@@ -70,10 +70,12 @@ class TestE2E:
 
     @pytest.mark.asyncio
     async def test_simple_greeting_returns_response(self) -> None:
+        from nanoclaw.config import settings
+
         llm = ChatOpenAI(
-            model="deepseek-chat",
-            api_key="sk-0c90f95c01fe41e1afdcf494eb3a1c11",
-            base_url="https://api.deepseek.com",
+            model=settings.llm_model,
+            api_key=settings.openai_api_key,
+            base_url=settings.llm_base_url,
         )
         repo = MemorySessionRepo()
         graph = create_supervisor(llm, _make_registry(), repo)
