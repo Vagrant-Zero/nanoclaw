@@ -26,18 +26,16 @@
 # Install dependencies
 make install
 
-# Configure LLM key
+# Configure
 cat > backend/.env << 'EOF'
 OPENAI_API_KEY=sk-your-deepseek-key
 LLM_MODEL=deepseek-v4-pro
 LLM_BASE_URL=https://api.deepseek.com
 EOF
 
-# Start backend
+# Run (two terminals)
 make backend
-
-# Start TUI (in another terminal)
 make app
 ```
 
-Type a request. You'll see the agent think, call tools, and stream results back to you as it works.
+Type a request. The agent thinks, calls tools, and streams results back as it works.
