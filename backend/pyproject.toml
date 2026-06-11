@@ -28,5 +28,7 @@ build-backend = "hatchling.build"
 [dependency-groups]
 dev = [
     "hatchling>=1.29.0",
+    "httpx>=0.28.1",
     "pytest>=9.0.3",
+    "pytest-asyncio>=1.4.0",
 ]

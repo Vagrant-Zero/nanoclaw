@@ -9,7 +9,7 @@ avoiding LLM calls for trivial queries. LLM fallback added in Phase 2.
 
 from __future__ import annotations
 
-from typing import Any, Literal
+from typing import Any
 
 from langgraph.graph import END, StateGraph
 
@@ -27,18 +27,20 @@ _COMPLEX_KEYWORDS = frozenset({
 })
 
 
-def router_node(state: AgentState) -> Literal["react", "plan"]:
+def router_node(state: AgentState) -> dict[str, str]:
     """Route user input: simple → react, complex → plan (Phase 2).
 
+    Returns a dict update for AgentState's routing key.
     Phase 1 always routes to "react". The "plan" path is reserved for
     Phase 2 and will never be reached until the Supervisor graph adds
     planner/dispatch/collect nodes.
     """
     last_message = state["messages"][-1]
     content = getattr(last_message, "content", "") or ""
-    if any(kw in content for kw in _COMPLEX_KEYWORDS) and len(content) > _MIN_COMPLEX_LENGTH:
-        return "plan"
-    return "react"
+    route = "plan" if (
+        any(kw in content for kw in _COMPLEX_KEYWORDS) and len(content) > _MIN_COMPLEX_LENGTH
+    ) else "react"
+    return {"router_decision": route}
 
 
 def create_supervisor(
@@ -69,10 +71,10 @@ def create_supervisor(
     builder.set_entry_point("router")
     builder.add_conditional_edges(
         "router",
-        lambda s: s,
+        lambda s: s["router_decision"],
         {
             "react": "react",
-            "plan": END,  # Phase 1: plan path terminates; Phase 2: routes to planner
+            "plan": END,
         },
     )
     builder.add_edge("react", END)

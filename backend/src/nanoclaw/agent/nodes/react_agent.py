@@ -6,7 +6,8 @@ This graph is the fundamental building block of Nanoclaw's agent:
 
 The graph is built as a factory function that injects LLM and tool
 dependencies at construction time (not in AgentState), keeping the
-state pure and serializable.
+state pure and serializable. Tools are passed as raw dicts to LLM
+(required for openai>=2.0 compatibility).
 """
 
 from __future__ import annotations
@@ -14,7 +15,6 @@ from __future__ import annotations
 from typing import Any
 
 from langgraph.graph import END, StateGraph
-from langgraph.prebuilt import ToolNode
 
 from nanoclaw.agent.state import AgentState
 from nanoclaw.tools.registry import ToolRegistry
@@ -37,12 +37,12 @@ def create_react_agent(
     Returns:
         A compiled langgraph.graph.CompiledStateGraph.
     """
-    tools = tool_registry.to_langchain()
-    tool_node = ToolNode(tools)
+    tool_node = tool_registry.get_tool_node()
+    openai_tools = tool_registry.to_openai_dicts()
 
     async def call_model(state: AgentState) -> dict[str, list]:
         """Invoke the LLM with current message history and available tools."""
-        response = await llm.ainvoke(state["messages"], tools=tools)
+        response = await llm.ainvoke(state["messages"], tools=openai_tools)
         return {"messages": [response]}
 
     def should_continue(state: AgentState) -> str:

@@ -1,15 +1,21 @@
 """Tool registry — register, retrieve, and convert tools to LangChain format."""
 
-import inspect
+from __future__ import annotations
+
 from typing import Any
 
 from langchain_core.tools import StructuredTool
+from langchain_core.utils.function_calling import convert_to_openai_tool
 
 from nanoclaw.tools.base import BaseTool
 
 
 class ToolRegistry:
-    """Central registry for all available tools."""
+    """Central registry for all available tools.
+
+    Tools are registered once at application startup and never modified
+    per-request — this keeps the tools parameter stable for KV caching.
+    """
 
     def __init__(self) -> None:
         self._tools: dict[str, BaseTool] = {}
@@ -22,7 +28,8 @@ class ToolRegistry:
         """Retrieve a tool by name."""
         tool = self._tools.get(name)
         if tool is None:
-            raise KeyError(f"Unknown tool: {name}")
+            msg = f"Unknown tool: {name!r}"
+            raise KeyError(msg)
         return tool
 
     def list(self) -> list[dict[str, Any]]:
@@ -37,40 +44,38 @@ class ToolRegistry:
         ]
 
     def to_langchain(self) -> list[StructuredTool]:
-        """Convert all registered tools to LangChain StructuredTool instances."""
-        result: list[StructuredTool] = []
-        for t in self._tools.values():
+        """Convert all registered tools to LangChain StructuredTool instances.
 
-            def tool_fn(**kwargs: Any) -> str:
-                return t.run(**kwargs)
+        Used by ToolNode (LangGraph prebuilt) for tool execution.
+        """
 
-            tool_fn.__name__ = t.spec.name
-            tool_fn.__doc__ = t.spec.description
+        def _make_wrapper(tool: BaseTool):
+            def _run(**kwargs: Any) -> str:
+                return tool.run(**kwargs)
 
-            # Build signature from JSON schema properties
-            params: list[inspect.Parameter] = []
-            properties = t.spec.parameters.get("properties", {})
-            required = t.spec.parameters.get("required", [])
-            for pname, pdef in properties.items():
-                annotation = str  # default
-                ptype = pdef.get("type", "string")
-                if ptype == "string":
-                    annotation = str
-                elif ptype in ("integer", "number"):
-                    annotation = int
-                elif ptype == "boolean":
-                    annotation = bool
-                default = inspect.Parameter.empty if pname in required else None
-                params.append(
-                    inspect.Parameter(pname, inspect.Parameter.KEYWORD_ONLY, default=default, annotation=annotation)
-                )
-            tool_fn.__signature__ = inspect.Signature(params)  # type: ignore[attr-defined]
+            return _run
 
-            result.append(
-                StructuredTool.from_function(
-                    name=t.spec.name,
-                    description=t.spec.description,
-                    func=tool_fn,
-                )
+        return [
+            StructuredTool(
+                name=t.spec.name,
+                description=t.spec.description,
+                args_schema=t.spec.parameters,
+                func=_make_wrapper(t),
             )
-        return result
+            for t in self._tools.values()
+        ]
+
+    def to_openai_dicts(self) -> list[dict[str, Any]]:
+        """Convert tools to OpenAI-compatible dicts for LLM.ainvoke().
+
+        Uses convert_to_openai_tool to produce serializable dicts — required
+        because openai>=2.0 fails to serialize StructuredTool function objects.
+        The StructuredTool list is still used by ToolNode for execution.
+        """
+        return [convert_to_openai_tool(t) for t in self.to_langchain()]
+
+    def get_tool_node(self):
+        """Return a LangGraph ToolNode pre-configured with all registered tools."""
+        from langgraph.prebuilt import ToolNode
+
+        return ToolNode(self.to_langchain())
