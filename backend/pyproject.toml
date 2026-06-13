@@ -14,7 +14,6 @@ dependencies = [
     "httpx>=0.28",
     "sse-starlette>=2.2",
     "python-dotenv>=1.2.2",
-    "chromadb>=0.6",
 ]
 
 [project.scripts]
