@@ -50,6 +50,18 @@ class Settings(BaseSettings):
         """Evaluation log directory under home."""
         return str(Path(self.home) / "eval")
 
+    @computed_field  # type: ignore[misc]
+    @property
+    def memory_dir(self) -> str:
+        """Memory store directory under home."""
+        return str(Path(self.home) / "memory")
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def dreams_dir(self) -> str:
+        """Dreaming summary directory under home."""
+        return str(Path(self.home) / "dreams")
+
     def __init__(self, **kwargs):
         # Load from env / .env before prefix resolution
         for field in ("openai_api_key", "llm_model", "llm_base_url"):

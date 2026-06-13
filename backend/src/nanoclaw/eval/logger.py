@@ -144,3 +144,38 @@ class EventLogger:
             except asyncio.QueueEmpty:
                 break
         return items
+
+    async def read_session_events(
+        self,
+        session_id: str,
+        event_type: str | None = None,
+    ) -> list[dict]:
+        """Read all events for a session, optionally filtered by type."""
+        path = self._base / session_id / "events.jsonl"
+        if not path.exists():
+            return []
+
+        def _read() -> list[dict]:
+            result: list[dict] = []
+            with open(path, encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    ev = json.loads(line)
+                    if event_type and ev.get("type") != event_type:
+                        continue
+                    result.append(ev)
+            return result
+
+        return await asyncio.to_thread(_read)
+
+    async def list_sessions(self) -> list[str]:
+        """List all session IDs with eval data."""
+        if not self._base.exists():
+            return []
+
+        def _list() -> list[str]:
+            return sorted(d.name for d in self._base.iterdir() if d.is_dir())
+
+        return await asyncio.to_thread(_list)
