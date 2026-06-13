@@ -2,21 +2,19 @@
 
 from __future__ import annotations
 
-from typing import TYPE_CHECKING, Annotated, Sequence, TypedDict
+from typing import Annotated, Sequence, TypedDict
 
 from langchain_core.messages import AnyMessage
 from langgraph.graph.message import add_messages
 
+from nanoclaw.agent.checker.checker import CheckerFeedback
+from nanoclaw.agent.checker.iteration_budget import IterationBudget
+from nanoclaw.agent.checker.trajectory_logger import TrajectoryLogger
+from nanoclaw.agent.worker_pool import WorkerPool
+from nanoclaw.models.task import TaskPlan
 from nanoclaw.storage.session_repo import SessionRepository
-
-if TYPE_CHECKING:
-    from nanoclaw.agent.checker.checker import CheckerFeedback
-    from nanoclaw.agent.checker.iteration_budget import IterationBudget
-    from nanoclaw.agent.checker.trajectory_logger import TrajectoryLogger
-    from nanoclaw.agent.worker_pool import WorkerPool
-    from nanoclaw.models.task import TaskPlan
-    from nanoclaw.storage.task_queue import TaskQueue
-    from nanoclaw.tools.registry import ToolRegistry
+from nanoclaw.storage.task_queue import TaskQueue
+from nanoclaw.tools.registry import ToolRegistry
 
 
 class AgentState(TypedDict):
