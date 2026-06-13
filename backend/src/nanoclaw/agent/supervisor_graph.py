@@ -48,6 +48,22 @@ async def _dispatch_node(state: dict) -> dict:
     await task_queue.init_plan(plan)
     worker_pool.session_id = state.get("session_id", "")
     worker_pool.session_repo = state.get("session_repo")
+
+    # Emit agent_plan so TUI can display the subtask DAG
+    tasks_list = [
+        {
+            "id": s.id,
+            "description": s.description,
+            "status": s.status.value,
+            "depends_on": list(s.depends_on),
+        }
+        for s in plan.subtasks
+    ]
+    await worker_pool.emit_event("agent_plan", {
+        "tasks": tasks_list,
+        "session_id": state.get("session_id", ""),
+    })
+
     await worker_pool.start()
 
     return {}
