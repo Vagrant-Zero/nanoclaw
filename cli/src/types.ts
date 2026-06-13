@@ -149,3 +149,26 @@ export interface ErrorData {
   message: string
   task_id: string
 }
+
+// ── Phase 4: Scheduled task types ──────────────────────────
+
+export interface ScheduledTask {
+  id: string
+  description: string
+  prompt: string
+  schedule: string
+  enabled: boolean
+  last_run: string | null
+  created_at: number
+}
+
+export interface CreateScheduleRequest {
+  description: string
+  prompt: string
+  schedule: string
+  enabled?: boolean
+}
+
+export interface ScheduleListResponse {
+  tasks: ScheduledTask[]
+}

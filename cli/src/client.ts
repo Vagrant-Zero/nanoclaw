@@ -68,3 +68,29 @@ export async function rejectMemory(baseUrl: string, entryId: string): Promise<vo
   const res = await fetch(`${baseUrl}/memories/${entryId}/reject`, { method: "POST" })
   if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
 }
+export async function listSchedules(baseUrl: string): Promise<import("./types.js").ScheduleListResponse> {
+  const res = await fetch(baseUrl + "/schedules")
+  if (!res.ok) throw new Error("HTTP " + res.status)
+  return res.json()
+}
+
+export async function createSchedule(baseUrl: string, req: import("./types.js").CreateScheduleRequest): Promise<{status: string; task: import("./types.js").ScheduledTask}> {
+  const res = await fetch(baseUrl + "/schedules", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(req),
+  })
+  if (!res.ok) throw new Error("HTTP " + res.status)
+  return res.json()
+}
+
+export async function deleteSchedule(baseUrl: string, taskId: string): Promise<void> {
+  const res = await fetch(baseUrl + "/schedules/" + taskId, { method: "DELETE" })
+  if (!res.ok) throw new Error("HTTP " + res.status)
+}
+
+export async function toggleSchedule(baseUrl: string, taskId: string): Promise<{status: string}> {
+  const res = await fetch(baseUrl + "/schedules/" + taskId + "/toggle", { method: "PATCH" })
+  if (!res.ok) throw new Error("HTTP " + res.status)
+  return res.json()
+}
