@@ -11,6 +11,8 @@ awaited, and collected into a final response.
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import Any
 
 from langchain_core.messages import AIMessage
@@ -128,7 +130,32 @@ async def _collect_node(state: dict) -> dict:
     if state_errors:
         parts.append(f"\n\nSystem errors: {'; '.join(state_errors)}")
 
-    return {"messages": [AIMessage(content="".join(parts))]}
+    response_text = "".join(parts)
+
+    # Phase 3: Log task_end event
+    event_logger = state.get("event_logger")
+    if event_logger is not None:
+        sid = state.get("session_id") or "unknown"
+        tid = state.get("task_id") or "root"
+        await event_logger.log_event(sid, "task_end", {
+            "task_id": tid,
+            "success": len(failed) == 0,
+            "result_summary": response_text[:200],
+            "duration_ms": 0,
+        })
+
+    # Phase 3: Fire-and-forget reflection
+    reflection_engine = state.get("reflection_engine")
+    if reflection_engine is not None and plan is not None and succeeded:
+        asyncio.create_task(
+            reflection_engine.reflect(
+                session_id=state.get("session_id") or "unknown",
+                subtasks=plan.subtasks,
+                task_results=results,
+            )
+        )
+
+    return {"messages": [AIMessage(content=response_text)]}
 
 
 # ── Supervisor factory ──

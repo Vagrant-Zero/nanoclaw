@@ -14,6 +14,8 @@ from nanoclaw.agent.worker_pool import WorkerPool
 from nanoclaw.models.task import TaskPlan
 from nanoclaw.storage.session_repo import SessionRepository
 from nanoclaw.storage.task_queue import TaskQueue
+from nanoclaw.eval.logger import EventLogger
+from nanoclaw.memory.reflection import ReflectionEngine
 from nanoclaw.tools.registry import ToolRegistry
 
 
@@ -53,3 +55,7 @@ class SupervisorState(AgentState):
     checker_feedback: CheckerFeedback | None   # Check failure feedback (for re-plan)
     iteration_budget: IterationBudget | None   # Cascading iteration limits
     trajectory_logger: TrajectoryLogger | None  # Trajectory file logger
+
+    # Phase 3: Memory & Evaluation fields
+    event_logger: EventLogger | None               # Evaluation event logging
+    reflection_engine: ReflectionEngine | None     # Post-task reflection
