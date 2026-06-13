@@ -1,9 +1,12 @@
 """Application configuration via pydantic-settings."""
 
+from __future__ import annotations
+
 import os
 from pathlib import Path
 
 from dotenv import load_dotenv
+from pydantic import computed_field
 from pydantic_settings import BaseSettings
 
 # Load .env before BaseSettings reads env vars.
@@ -18,7 +21,7 @@ class Settings(BaseSettings):
         "extra": "ignore",
     }
 
-    # LLM configuration — all settings load from env or .env file
+    # LLM configuration
     llm_provider: str = "openai"
     llm_model: str = "deepseek-v4-pro"
     llm_base_url: str = "https://api.deepseek.com"
@@ -30,6 +33,22 @@ class Settings(BaseSettings):
 
     # Persistence
     db_path: str = "nanoclaw.db"
+
+    # Phase 3: Memory & Evaluation root directory
+    # Set via NANOCLAW_HOME env var. Defaults to .nanoclaw in CWD.
+    home: str = ".nanoclaw"
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def chroma_persist_dir(self) -> str:
+        """ChromaDB persistent storage directory under home."""
+        return str(Path(self.home) / "memory" / "chroma")
+
+    @computed_field  # type: ignore[misc]
+    @property
+    def eval_dir(self) -> str:
+        """Evaluation log directory under home."""
+        return str(Path(self.home) / "eval")
 
     def __init__(self, **kwargs):
         # Load from env / .env before prefix resolution
