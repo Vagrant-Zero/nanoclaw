@@ -22,7 +22,7 @@ from nanoclaw.tools.registry import ToolRegistry
 from nanoclaw.eval import EventLogger
 from nanoclaw.memory import create_memory_store, ReflectionEngine
 from nanoclaw.models.chat import ChatMessage, Session as ChatSession
-from nanoclaw.scheduler import MemoryScheduledTaskRepo, Scheduler
+from nanoclaw.scheduler import MemoryScheduledTaskRepo, Scheduler, ScheduledTask
 from nanoclaw.server.deps import get_llm, get_session_repo, get_supervisor, get_tool_registry
 
 
@@ -40,6 +40,13 @@ class ToolCallInfo(BaseModel):
     name: str
     args: dict
     result: str | None = None
+
+
+class CreateScheduleRequest(BaseModel):
+    description: str
+    prompt: str
+    schedule: str
+    enabled: bool = True
 
 
 class ChatResponse(BaseModel):
@@ -317,6 +324,71 @@ def create_app() -> FastAPI:
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))
         return {"status": "ok", "date": summary["date"], "summary": summary}
+
+    # ── Phase 4: Scheduled task CRUD ───────────────────────────────
+
+    @app.get("/schedules")
+    async def list_schedules() -> dict:
+        sched = getattr(app.state, "scheduler", None)
+        tasks = await sched.task_repo.list_all() if sched else []
+        return {
+            "tasks": [
+                {
+                    "id": t.id, "description": t.description,
+                    "prompt": t.prompt, "schedule": t.schedule,
+                    "enabled": t.enabled, "last_run": t.last_run,
+                    "created_at": t.created_at,
+                }
+                for t in tasks
+            ]
+        }
+
+    @app.post("/schedules")
+    async def create_schedule(req: CreateScheduleRequest) -> dict:
+        sched = getattr(app.state, "scheduler", None)
+        if sched is None:
+            raise HTTPException(status_code=503, detail="Scheduler not available")
+        task = ScheduledTask(
+            description=req.description,
+            prompt=req.prompt,
+            schedule=req.schedule,
+            enabled=req.enabled,
+        )
+        created = await sched.task_repo.create(task)
+        return {
+            "status": "ok",
+            "task": {
+                "id": created.id, "description": created.description,
+                "schedule": created.schedule, "enabled": created.enabled,
+            },
+        }
+
+    @app.delete("/schedules/{task_id}")
+    async def delete_schedule(task_id: str) -> dict:
+        sched = getattr(app.state, "scheduler", None)
+        if sched is None:
+            raise HTTPException(status_code=503, detail="Scheduler not available")
+        await sched.task_repo.delete(task_id)
+        return {"status": "ok"}
+
+    @app.patch("/schedules/{task_id}/toggle")
+    async def toggle_schedule(task_id: str) -> dict:
+        sched = getattr(app.state, "scheduler", None)
+        if sched is None:
+            raise HTTPException(status_code=503, detail="Scheduler not available")
+        task = await sched.task_repo.get(task_id)
+        if task is None:
+            raise HTTPException(status_code=404, detail="Schedule not found")
+        updated = await sched.task_repo.update(
+            task_id, {"enabled": not task.enabled}
+        )
+        return {
+            "status": "ok",
+            "task": {
+                "id": updated.id, "description": updated.description,
+                "schedule": updated.schedule, "enabled": updated.enabled,
+            },
+        }
 
     # ── Memory endpoints ────────────────────────────────────────────
 
