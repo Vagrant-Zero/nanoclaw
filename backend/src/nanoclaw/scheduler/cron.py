@@ -73,9 +73,17 @@ def cron_next(expr: str, after: datetime) -> datetime:
             continue
 
         # ---- day (day_of_month OR day_of_week) ----
-        dom_match = dt.day in parsed["day_of_month"]
-        dow_match = dt.weekday() in parsed["day_of_week"]
-        if not dom_match and not dow_match:
+        _dom_all = parsed["day_of_month"] == set(range(1, 32))
+        _dow_all = parsed["day_of_week"] == set(range(0, 7))
+        if _dom_all and _dow_all:
+            _day_ok = True
+        elif _dom_all:
+            _day_ok = dt.weekday() in parsed["day_of_week"]
+        elif _dow_all:
+            _day_ok = dt.day in parsed["day_of_month"]
+        else:
+            _day_ok = dt.day in parsed["day_of_month"] or dt.weekday() in parsed["day_of_week"]
+        if not _day_ok:
             dt += timedelta(days=1)
             dt = dt.replace(hour=0, minute=0)
             continue
