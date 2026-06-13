@@ -1,6 +1,7 @@
 """Dreaming subsystem — background experience mining and consolidation."""
 from __future__ import annotations
 
+from nanoclaw.dreaming.engine import DreamingEngine, extract_tool_chains
 from nanoclaw.dreaming.tools import (
     LlmAnalyzeTool,
     ReadEvalLogsTool,
@@ -10,9 +11,11 @@ from nanoclaw.dreaming.tools import (
 )
 
 __all__ = [
+    "DreamingEngine",
     "LlmAnalyzeTool",
     "ReadEvalLogsTool",
     "ReadMemoryTool",
     "WriteMemoryTool",
+    "extract_tool_chains",
     "register_dreaming_tools",
 ]
