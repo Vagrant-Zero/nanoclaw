@@ -8,6 +8,7 @@ memory context (user profile, skills).  When ``event_logger`` is provided,
 from __future__ import annotations
 
 import asyncio
+import json
 import time
 from typing import TYPE_CHECKING, Any, Callable
 
@@ -49,6 +50,7 @@ def create_react_agent(
     # ── Agent node ───────────────────────────────────────────────
 
     async def call_model(state: AgentState) -> dict[str, list]:
+        _start = time.time()
         async with asyncio.timeout(llm_timeout):
             if context_manager is not None:
                 from nanoclaw.context.manager import SessionContext
@@ -65,6 +67,15 @@ def create_react_agent(
                 response = await llm.ainvoke(
                     state["messages"], tools=openai_tools
                 )
+        _duration_ms = round((time.time() - _start) * 1000, 1)
+
+        # Extract token counts if available
+        _in_tok = 0
+        _out_tok = 0
+        if hasattr(response, "response_metadata"):
+            _usage = response.response_metadata.get("token_usage") or {}
+            _in_tok = _usage.get("prompt_tokens") or _usage.get("input_tokens") or 0
+            _out_tok = _usage.get("completion_tokens") or _usage.get("output_tokens") or 0
 
         # Log llm_call
         if event_logger is not None:
@@ -73,9 +84,9 @@ def create_react_agent(
             await event_logger.log_event(sid, "llm_call", {
                 "task_id": tid,
                 "model": getattr(llm, "model_name", "unknown"),
-                "input_tokens": 0,
-                "output_tokens": 0,
-                "duration_ms": 0,
+                "input_tokens": _in_tok,
+                "output_tokens": _out_tok,
+                "duration_ms": _duration_ms,
             })
 
         # SSE events
@@ -121,16 +132,26 @@ def create_react_agent(
                     {"tool": tool_name, "result": content, "task_id": task_id},
                 )
 
-        # Log tool_call events
+        # Log tool_call events with argument summary
+        # Build args map from the AIMessage that triggered the tool call
+        _args_map: dict[str, str] = {}
+        _last_msg = state.get("messages", [None])[-1]
+        if _last_msg is not None and hasattr(_last_msg, "tool_calls"):
+            for _tc in _last_msg.tool_calls:
+                _tid = _tc.get("id", "") if isinstance(_tc, dict) else getattr(_tc, "id", "")
+                _targs = _tc.get("args", {}) if isinstance(_tc, dict) else getattr(_tc, "args", {})
+                _args_map[_tid] = json.dumps(_targs, ensure_ascii=False)[:200]
+
         if event_logger is not None:
             sid = state.get("session_id") or "unknown"
             tid = state.get("task_id") or "root"
             new_msgs = result.get("messages", [])
             for msg in new_msgs:
+                _tcid = getattr(msg, "tool_call_id", "")
                 await event_logger.log_event(sid, "tool_call", {
                     "task_id": tid,
                     "tool_name": getattr(msg, "name", "unknown"),
-                    "args_summary": "",
+                    "args_summary": _args_map.get(_tcid, ""),
                     "result_summary": str(getattr(msg, "content", ""))[:200],
                     "duration_ms": 0,
                 })
