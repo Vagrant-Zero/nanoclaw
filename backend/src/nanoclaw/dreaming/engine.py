@@ -95,6 +95,14 @@ class DreamingEngine:
         await pool.start()
         try:
             results = await tq.wait_for_all()
+        except asyncio.CancelledError:
+            raise
+        except Exception as exc:
+            await self._eval_logger.log_event("dreaming", "error", {
+                "date": date_str,
+                "message": f"Dreaming failed: {exc}",
+            })
+            raise
         finally:
             await pool.stop()
 

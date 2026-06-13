@@ -23,6 +23,7 @@ from nanoclaw.eval import EventLogger
 from nanoclaw.memory import create_memory_store, ReflectionEngine
 from nanoclaw.models.chat import ChatMessage, Session as ChatSession
 from nanoclaw.scheduler import MemoryScheduledTaskRepo, Scheduler, ScheduledTask
+from nanoclaw.scheduler.cron import parse_cron
 from nanoclaw.server.deps import get_llm, get_session_repo, get_supervisor, get_tool_registry
 
 
@@ -95,6 +96,7 @@ async def lifespan(app: FastAPI):
         llm=llm,
         tool_registry=get_tool_registry(),
         dreaming_engine=dreaming_engine,
+        dreams_dir=settings.dreams_dir,
     )
     app.state.dreaming_engine = dreaming_engine
     app.state.scheduler = scheduler
@@ -345,6 +347,12 @@ def create_app() -> FastAPI:
 
     @app.post("/schedules")
     async def create_schedule(req: CreateScheduleRequest) -> dict:
+        try:
+            parse_cron(req.schedule)
+        except ValueError as exc:
+            raise HTTPException(
+                status_code=422, detail=f"Invalid cron expression: {exc}",
+            )
         sched = getattr(app.state, "scheduler", None)
         if sched is None:
             raise HTTPException(status_code=503, detail="Scheduler not available")

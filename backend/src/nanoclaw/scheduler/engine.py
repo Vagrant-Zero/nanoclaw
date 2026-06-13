@@ -11,6 +11,7 @@ from __future__ import annotations
 import asyncio
 import time
 from datetime import datetime
+from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
 from nanoclaw.models.chat import Session as ChatSession
@@ -51,6 +52,7 @@ class Scheduler:
         llm: Any,
         tool_registry: ToolRegistry,
         dreaming_engine: DreamingEngine | None = None,
+        dreams_dir: str = ".nanoclaw/dreams",
     ) -> None:
         self._task_repo = task_repo
         self._session_repo = session_repo
@@ -61,7 +63,9 @@ class Scheduler:
 
         self._running = False
         self._loop_task: asyncio.Task | None = None
+        self._running_tasks: set[str] = set()
         self._dreaming_triggered_today: str = ""
+        self._dreams_dir = Path(dreams_dir)
 
     @property
     def task_repo(self) -> ScheduledTaskRepo:
@@ -74,6 +78,10 @@ class Scheduler:
         """Start the background polling loop."""
         if self._running:
             return
+        # Restore dreaming trigger state from file (survives restart)
+        state_path = self._dreams_dir / ".last_dreaming"
+        if state_path.exists():
+            self._dreaming_triggered_today = state_path.read_text().strip()
         self._running = True
         self._loop_task = asyncio.create_task(self._run_loop())
 
@@ -101,9 +109,11 @@ class Scheduler:
 
     async def _check_and_dispatch(self) -> None:
         """Check for due tasks and trigger dreaming if applicable."""
-        # Dispatch due scheduled tasks
+        # Dispatch due scheduled tasks (skip already-running)
         due = await self._task_repo.get_due_tasks()
         for task in due:
+            if task.id in self._running_tasks:
+                continue
             await self._dispatch_task(task)
 
         # Trigger dreaming
@@ -117,45 +127,53 @@ class Scheduler:
         from nanoclaw.agent.worker_pool import WorkerPool
         from nanoclaw.storage.task_queue import MemoryQueue
 
-        task_queue = MemoryQueue()
-        agent = create_react_agent(self._llm, self._tool_registry)
-        pool = WorkerPool(
-            task_queue=task_queue,
-            react_agent=agent,
-            llm=self._llm,
-            num_workers=1,
-        )
-
-        now = datetime.now()
-        session_id = (
-            f"sched_{task.id}_{now.strftime('%Y%m%d_%H%M%S')}"
-        )
-        session = ChatSession(id=session_id, created_at=time.time())
-        await self._session_repo.create(session)
-
-        subtask = Subtask(
-            id=task.id,
-            description=task.prompt or task.description,
-        )
-        plan = TaskPlan(session_id=session_id, subtasks=[subtask])
-
-        await self._eval_logger.log_event(
-            session_id, "task_start",
-            {"task_id": task.id, "description": task.description,
-             "subtask_count": 1, "created_at": time.time()},
-        )
-
-        await task_queue.init_plan(plan)
-        await pool.start()
+        self._running_tasks.add(task.id)
         try:
-            await task_queue.wait_for_all()
-        finally:
-            await pool.stop()
+            task_queue = MemoryQueue()
+            agent = create_react_agent(self._llm, self._tool_registry)
+            pool = WorkerPool(
+                task_queue=task_queue,
+                react_agent=agent,
+                llm=self._llm,
+                num_workers=1,
+            )
 
-        # Update last_run
-        await self._task_repo.update_last_run(
-            task.id, now.isoformat(),
-        )
+            now = datetime.now()
+            session_id = (
+                f"sched_{task.id}_{now.strftime('%Y%m%d_%H%M%S')}"
+            )
+            session = ChatSession(id=session_id, created_at=time.time())
+            await self._session_repo.create(session)
+
+            subtask = Subtask(
+                id=task.id,
+                description=task.prompt or task.description,
+            )
+            plan = TaskPlan(session_id=session_id, subtasks=[subtask])
+
+            await self._eval_logger.log_event(
+                session_id, "task_start",
+                {"task_id": task.id, "description": task.description,
+                 "subtask_count": 1, "created_at": time.time()},
+            )
+
+            await task_queue.init_plan(plan)
+            await pool.start()
+            try:
+                await asyncio.wait_for(
+                    task_queue.wait_for_all(), timeout=300,
+                )
+            except asyncio.TimeoutError:
+                pass  # Task exceeded deadline; continue
+            finally:
+                await pool.stop()
+
+            # Update last_run
+            await self._task_repo.update_last_run(
+                task.id, now.isoformat(),
+            )
+        finally:
+            self._running_tasks.discard(task.id)
 
     # ── Dreaming trigger ──
 
@@ -174,6 +192,10 @@ class Scheduler:
             return  # Not yet time
 
         self._dreaming_triggered_today = today
+        # Persist to file so the state survives a restart
+        state_path = self._dreams_dir / ".last_dreaming"
+        state_path.parent.mkdir(parents=True, exist_ok=True)
+        state_path.write_text(today)
         yesterday = (now - __import__("datetime").timedelta(days=1)).strftime(
             "%Y-%m-%d"
         )
