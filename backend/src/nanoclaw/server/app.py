@@ -17,9 +17,12 @@ from starlette.responses import Response
 
 from nanoclaw.config import settings
 from nanoclaw.context import ContextManager
+from nanoclaw.dreaming import DreamingEngine, register_dreaming_tools
+from nanoclaw.tools.registry import ToolRegistry
 from nanoclaw.eval import EventLogger
 from nanoclaw.memory import create_memory_store, ReflectionEngine
 from nanoclaw.models.chat import ChatMessage, Session as ChatSession
+from nanoclaw.scheduler import MemoryScheduledTaskRepo, Scheduler
 from nanoclaw.server.deps import get_llm, get_session_repo, get_supervisor, get_tool_registry
 
 
@@ -63,8 +66,37 @@ async def lifespan(app: FastAPI):
     app.state.reflection_engine = reflection_engine
     app.state.context_manager = context_manager
 
+    # Phase 4: Dreaming + Scheduler
+    dreaming_registry = ToolRegistry()
+    register_dreaming_tools(
+        dreaming_registry, settings.eval_dir,
+        memory_store, llm,
+    )
+    dreaming_engine = DreamingEngine(
+        eval_logger=event_logger,
+        memory_store=memory_store,
+        session_repo=get_session_repo(),
+        llm=llm,
+        dreaming_tools=dreaming_registry,
+        eval_base_dir=settings.eval_dir,
+    )
+    sched_task_repo = MemoryScheduledTaskRepo()
+    scheduler = Scheduler(
+        task_repo=sched_task_repo,
+        session_repo=get_session_repo(),
+        eval_logger=event_logger,
+        llm=llm,
+        tool_registry=get_tool_registry(),
+        dreaming_engine=dreaming_engine,
+    )
+    app.state.dreaming_engine = dreaming_engine
+    app.state.scheduler = scheduler
+
+    await scheduler.start()
+
     yield
 
+    await scheduler.stop()
     await event_logger.close()
 
 
@@ -268,6 +300,23 @@ def create_app() -> FastAPI:
                     pass
 
         return EventSourceResponse(event_generator())
+
+    # ── Phase 4: Dreaming trigger ──────────────────────────────────
+
+    @app.post("/dream")
+    async def trigger_dreaming(date: str | None = None) -> dict:
+        """Manually trigger the daily dreaming process."""
+        engine = getattr(app.state, "dreaming_engine", None)
+        if engine is None:
+            raise HTTPException(
+                status_code=503,
+                detail="Dreaming engine not available",
+            )
+        try:
+            summary = await engine.run_dreaming(date)
+        except Exception as exc:
+            raise HTTPException(status_code=500, detail=str(exc))
+        return {"status": "ok", "date": summary["date"], "summary": summary}
 
     # ── Memory endpoints ────────────────────────────────────────────
 

@@ -45,10 +45,10 @@ class DreamingEngine:
         self,
         eval_logger: EventLogger,
         memory_store: MemoryStore,
-        task_queue: TaskQueue,
         session_repo: SessionRepository,
         llm: Any,
         dreaming_tools: ToolRegistry,
+        task_queue: TaskQueue | None = None,
         eval_base_dir: str = "",
     ) -> None:
         self._eval_logger = eval_logger
@@ -74,6 +74,7 @@ class DreamingEngine:
 
         from nanoclaw.agent.nodes.react_agent import create_react_agent
         from nanoclaw.agent.worker_pool import WorkerPool
+        from nanoclaw.storage.task_queue import MemoryQueue
 
         # Create a dedicated Dreaming worker (one subtask, one worker)
         dreaming_agent = create_react_agent(self._llm, self._dreaming_tools)
@@ -89,10 +90,11 @@ class DreamingEngine:
         plan = self._create_dreaming_plan(session.id, date_str)
 
         # Execute
-        await self._task_queue.init_plan(plan)
+        tq = self._task_queue if self._task_queue is not None else MemoryQueue()
+        await tq.init_plan(plan)
         await pool.start()
         try:
-            results = await self._task_queue.wait_for_all()
+            results = await tq.wait_for_all()
         finally:
             await pool.stop()
 
