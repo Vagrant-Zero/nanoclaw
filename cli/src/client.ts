@@ -57,3 +57,14 @@ export async function sendMessageStream(baseUrl: string, req: ChatRequest): Prom
   process.stdout.write("\n")
   return result
 }
+
+
+export async function confirmMemory(baseUrl: string, entryId: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/memories/${entryId}/confirm`, { method: "POST" })
+  if (!res.ok) throw new Error(`HTTP ${res.status}`)
+}
+
+export async function rejectMemory(baseUrl: string, entryId: string): Promise<void> {
+  const res = await fetch(`${baseUrl}/memories/${entryId}/reject`, { method: "POST" })
+  if (!res.ok && res.status !== 204) throw new Error(`HTTP ${res.status}`)
+}

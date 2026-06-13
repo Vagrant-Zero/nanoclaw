@@ -1,7 +1,7 @@
 import { render, Text, Box, useInput } from "ink";
 import { useEffect, useState } from "react";
 import TextInput from "ink-text-input";
-import { ChatMessage, SubtaskInfo, CheckResultData, IterationExhaustedData, TaskStatus } from "./types.js";
+import { ChatMessage, SubtaskInfo, CheckResultData, IterationExhaustedData, TaskStatus, ExperienceEntry } from "./types.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { loadConfig } from "./config.js";
 import { StreamingChat } from "./components/StreamingChat.js";
@@ -10,6 +10,8 @@ import { ThinkingBlock } from "./components/ThinkingBlock.js";
 import { ToolCallCard } from "./components/ToolCallCard.js";
 import { PlanView } from "./components/PlanView.js";
 import { CheckResultsPanel } from "./components/CheckResultBadge.js";
+import { ExperienceFeedback } from "./components/ExperienceFeedback.js";
+import { confirmMemory, rejectMemory } from "./client.js";
 
 const config = await loadConfig();
 
@@ -42,6 +44,7 @@ function App() {
   const [currentPlan, setCurrentPlan] = useState<SubtaskInfo[]>([]);
   const [checkResults, setCheckResults] = useState<CheckResultEntry[]>([]);
   const [budgetExhausted, setBudgetExhausted] = useState<IterationExhaustedData | null>(null);
+  const [pendingExperiences, setPendingExperiences] = useState<ExperienceEntry[]>([]);
 
   useInput((_data, key) => {
     if (key.escape) {
@@ -61,6 +64,7 @@ function App() {
     setCurrentPlan([]);
     setCheckResults([]);
     setBudgetExhausted(null);
+    setPendingExperiences([]);
     setStreamingMsg(value);
     setInput("");
   };
@@ -145,6 +149,23 @@ function App() {
             ])
           }
           onIterationExhausted={(data) => setBudgetExhausted(data)}
+          onExperience={(exp) => setPendingExperiences((prev) => [...prev, exp])}
+        />
+      )}
+
+      {/* Experience feedback */}
+      {pendingExperiences.length > 0 && (
+        <ExperienceFeedback
+          experience={pendingExperiences[0]}
+          onConfirm={async () => {
+            await confirmMemory(config.baseUrl, pendingExperiences[0].entry_id);
+            setPendingExperiences((prev) => prev.slice(1));
+          }}
+          onReject={async () => {
+            await rejectMemory(config.baseUrl, pendingExperiences[0].entry_id);
+            setPendingExperiences((prev) => prev.slice(1));
+          }}
+          onDismiss={() => setPendingExperiences((prev) => prev.slice(1))}
         />
       )}
 

@@ -5,6 +5,7 @@ import type {
   CheckResultData,
   IterationExhaustedData,
 } from "../types.js";
+import type { ExperienceEntry } from "../types.js";
 
 interface Props {
   baseUrl: string;
@@ -17,6 +18,7 @@ interface Props {
   onTaskStatus?: (taskId: string, status: string) => void;
   onCheckResult?: (data: CheckResultData) => void;
   onIterationExhausted?: (data: IterationExhaustedData) => void;
+  onExperience?: (experience: ExperienceEntry) => void;
 }
 
 /**
@@ -37,6 +39,7 @@ export function StreamingChat({
   onTaskStatus,
   onCheckResult,
   onIterationExhausted,
+  onExperience,
 }: Props) {
   const [content, setContent] = useState("");
 
@@ -89,6 +92,9 @@ export function StreamingChat({
                 break;
               case "iteration_exhausted":
                 onIterationExhausted?.(data);
+                break;
+              case "experience_ready":
+                onExperience?.(data);
                 break;
               case "message_chunk":
                 fullText += data.content;

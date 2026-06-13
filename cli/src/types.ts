@@ -25,6 +25,12 @@ export interface Config {
   default_model: string
 }
 
+export interface ExperienceEntry {
+  entry_id: string
+  summary: string
+  type: "user_profile" | "skill" | "semantic" | "reflection"
+}
+
 export interface ChatMessage {
   content: string
   role: "user" | "assistant"
