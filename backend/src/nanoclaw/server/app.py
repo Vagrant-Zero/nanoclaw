@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import json
 import time
 import uuid
@@ -68,17 +69,44 @@ def create_app() -> FastAPI:
 
     @app.post("/chat/stream")
     async def chat_stream(req: ChatRequest) -> EventSourceResponse:
-        """Streaming chat endpoint backed by the LangGraph supervisor.
+        """Streaming chat endpoint backed by the Phase 2 Supervisor graph.
 
-        Yields SSE events following the Nanoclaw protocol: agent_think,
-        agent_action, agent_observation, message_chunk, done.
-        All events carry task_id (always "root" in Phase 1).
+        Uses an ``asyncio.Queue`` bridge to collect SSE events from the
+        WorkerPool and the graph execution, then yields them to the client.
+
+        SSE protocol events: task_status, agent_think, agent_action,
+        agent_observation, agent_plan, check_result, message_chunk,
+        iteration_exhausted, done, error.
         """
         supervisor = get_supervisor()
         session_repo = get_session_repo()
+        tool_registry = get_tool_registry()
+        llm = get_llm()
 
         session_id = req.thread_id or str(uuid.uuid4())
-        task_id = "root"
+
+        # ── SSE event queue (bridge between graph/workers and SSE stream) ──
+        sse_queue: asyncio.Queue[dict] = asyncio.Queue()
+
+        async def sse_callback(event: str, data: dict) -> None:
+            """Put an event into the SSE queue (non-blocking wrapper)."""
+            await sse_queue.put({"event": event, "data": data})
+
+        # ── Per-request task queue and worker pool ──
+        from nanoclaw.agent.nodes.react_agent import create_react_agent
+        from nanoclaw.agent.worker_pool import WorkerPool
+        from nanoclaw.storage.task_queue import MemoryQueue
+
+        task_queue = MemoryQueue()
+        worker_react_agent = create_react_agent(
+            llm, tool_registry, sse_callback=sse_callback,
+        )
+        worker_pool = WorkerPool(
+            task_queue=task_queue,
+            react_agent=worker_react_agent,
+            llm=llm,
+            sse_callback=sse_callback,
+        )
 
         # Create or resume session
         session = await session_repo.get(session_id)
@@ -88,119 +116,87 @@ def create_app() -> FastAPI:
             )
 
         async def event_generator() -> AsyncGenerator[dict[str, str], None]:
-            # Append user message to history
+            # Append user message
             await session_repo.append_message(
                 session_id,
                 ChatMessage(content=req.message, role="user"),
             )
 
-            # Build initial state
-            history = await session_repo.get_history(session_id)
-            langchain_messages = [
-                HumanMessage(content=m.content) if m.role == "user" or m.role == "system"
-                else HumanMessage(content=m.content)
-                for m in history
-            ]
-
-            initial_state = {
-                "messages": langchain_messages,
-                "session_id": session_id,
-                "task_id": task_id,
-                "session_repo": session_repo,
-            }
-
+            # Initial task_status
             yield {
                 "event": "task_status",
                 "data": json.dumps(
-                    {"task_id": task_id, "status": "RUNNING"}, ensure_ascii=False
+                    {"task_id": "root", "status": "RUNNING"},
+                    ensure_ascii=False,
                 ),
             }
 
-            try:
-                stream_text = ""
+            # ── Build initial state for SupervisorState ──
+            initial_state: dict = {
+                "messages": [HumanMessage(content=req.message)],
+                "session_id": session_id,
+                "task_id": "root",
+                "session_repo": session_repo,
+                "tool_registry": tool_registry,
+                "task_queue": task_queue,
+                "plan": None,
+                "worker_pool": worker_pool,
+                "worker_results": None,
+                "errors": [],
+                "checker_feedback": None,
+                "iteration_budget": None,
+                "trajectory_logger": None,
+            }
 
-                async for event in supervisor.astream_events(
-                    initial_state, version="v2"
-                ):
-                    kind = event.get("event")
-
-                    if kind == "on_chat_model_stream":
-                        chunk = event["data"]["chunk"]
-                        if hasattr(chunk, "content") and chunk.content and isinstance(chunk.content, str):
-                            stream_text += chunk.content
-                            yield {
-                                "event": "message_chunk",
-                                "data": json.dumps(
-                                    {"content": chunk.content, "task_id": task_id},
-                                    ensure_ascii=False,
-                                ),
-                            }
-
-                    elif kind == "on_chat_model_end":
-                        output = event["data"]["output"]
-                        has_tool_calls = hasattr(output, "tool_calls") and output.tool_calls
-
-                        if has_tool_calls:
-                            # Emit agent_think from accumulated stream text if present
-                            if stream_text:
-                                yield {
-                                    "event": "agent_think",
-                                    "data": json.dumps(
-                                        {"content": stream_text, "task_id": task_id},
-                                        ensure_ascii=False,
-                                    ),
-                                }
-                            for tc in output.tool_calls:
-                                tc_name = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
-                                tc_args = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
-                                yield {
-                                    "event": "agent_action",
-                                    "data": json.dumps(
-                                        {"tool": tc_name, "args": tc_args, "task_id": task_id},
-                                        ensure_ascii=False,
-                                    ),
-                                }
-
-                        stream_text = ""
-
-                    elif kind == "on_tool_start":
-                        # Tool execution started
+            # ── Background graph execution ──
+            async def run_graph() -> None:
+                try:
+                    await supervisor.ainvoke(initial_state)
+                except asyncio.CancelledError:
+                    pass  # Client disconnected
+                except Exception as exc:
+                    try:
+                        await sse_queue.put({
+                            "event": "error",
+                            "data": {
+                                "message": str(exc)[:500],
+                                "task_id": "root",
+                            },
+                        })
+                    except Exception:
                         pass
+                finally:
+                    try:
+                        await worker_pool.stop()
+                    except Exception:
+                        pass
+                    await sse_queue.put({
+                        "event": "done",
+                        "data": {"session_id": session_id},
+                    })
 
-                    elif kind == "on_tool_end":
-                        tool_name = event.get("name", "unknown")
-                        tool_output = event["data"].get("output", "")
-                        yield {
-                            "event": "agent_observation",
-                            "data": json.dumps(
-                                {
-                                    "tool": tool_name,
-                                    "result": str(tool_output)[:2000],
-                                    "task_id": task_id,
-                                },
-                                ensure_ascii=False,
-                            ),
-                        }
+            graph_task = asyncio.create_task(run_graph())
 
-                # Persist assistant response to session history
-                await session_repo.append_message(
-                    session_id,
-                    ChatMessage(content="", role="assistant", metadata={"task_id": task_id}),
-                )
-
-                yield {
-                    "event": "done",
-                    "data": json.dumps({"session_id": session_id}, ensure_ascii=False),
-                }
-
-            except Exception as exc:
-                yield {
-                    "event": "error",
-                    "data": json.dumps(
-                        {"message": str(exc), "task_id": task_id},
-                        ensure_ascii=False,
-                    ),
-                }
+            # ── Event forwarding loop ──
+            try:
+                while True:
+                    event_data = await sse_queue.get()
+                    yield {
+                        "event": event_data["event"],
+                        "data": json.dumps(
+                            event_data["data"], ensure_ascii=False
+                        ),
+                    }
+                    if event_data["event"] == "done":
+                        break
+            except asyncio.CancelledError:
+                pass
+            finally:
+                graph_task.cancel()
+                try:
+                    await graph_task
+                except (asyncio.CancelledError, Exception):
+                    pass
 
         return EventSourceResponse(event_generator())
 
