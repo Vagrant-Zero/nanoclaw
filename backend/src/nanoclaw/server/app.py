@@ -88,10 +88,63 @@ def create_app() -> FastAPI:
 
     @app.post("/chat", response_model=ChatResponse)
     async def chat(req: ChatRequest) -> ChatResponse:
+        """Synchronous chat backed by the Phase 2 Supervisor graph."""
+        supervisor = get_supervisor()
+        session_repo = get_session_repo()
+        tool_registry = get_tool_registry()
+        llm = get_llm()
+
+        session_id = req.thread_id or str(uuid.uuid4())
+        session = await session_repo.get(session_id)
+        if session is None:
+            session = await session_repo.create(
+                ChatSession(id=session_id, created_at=time.time())
+            )
+
+        from nanoclaw.storage.task_queue import MemoryQueue
+        from nanoclaw.agent.worker_pool import WorkerPool
+        from nanoclaw.agent.nodes.react_agent import create_react_agent
+
+        task_queue = MemoryQueue()
+        worker_agent = create_react_agent(llm, tool_registry)
+        worker_pool = WorkerPool(
+            task_queue=task_queue, react_agent=worker_agent, llm=llm,
+        )
+
+        state: dict = {
+            "messages": [HumanMessage(content=req.message)],
+            "session_id": session_id, "task_id": "root",
+            "session_repo": session_repo,
+            "tool_registry": tool_registry, "task_queue": task_queue,
+            "plan": None, "worker_pool": worker_pool,
+            "worker_results": None, "errors": [],
+            "checker_feedback": None, "iteration_budget": None,
+            "trajectory_logger": None,
+            "event_logger": getattr(app.state, "event_logger", None),
+            "reflection_engine": getattr(app.state, "reflection_engine", None),
+        }
+
+        try:
+            result = await supervisor.ainvoke(state)
+        finally:
+            await worker_pool.stop()
+
+        msgs = result.get("messages", [])
+        final = msgs[-1] if msgs else None
+        response_text = final.content if final else ""
+
+        tool_calls_info: list[ToolCallInfo] = []
+        for m in msgs:
+            if hasattr(m, "tool_calls") and m.tool_calls:
+                for tc in m.tool_calls:
+                    n = tc.get("name", "") if isinstance(tc, dict) else getattr(tc, "name", "")
+                    a = tc.get("args", {}) if isinstance(tc, dict) else getattr(tc, "args", {})
+                    tool_calls_info.append(ToolCallInfo(name=n, args=a, result=None))
+
         return ChatResponse(
-            response=f"You said: {req.message}",
-            thread_id=req.thread_id,
-            tool_calls=[],
+            response=response_text,
+            thread_id=session_id,
+            tool_calls=tool_calls_info,
         )
 
     @app.post("/chat/stream")

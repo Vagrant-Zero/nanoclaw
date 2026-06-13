@@ -12,6 +12,7 @@ awaited, and collected into a final response.
 from __future__ import annotations
 
 import asyncio
+import time
 
 from typing import Any
 
@@ -66,9 +67,20 @@ async def _dispatch_node(state: dict) -> dict:
         "session_id": state.get("session_id", ""),
     })
 
+    # Log task_start event
+    el = state.get("event_logger")
+    if el is not None:
+        await el.log_event(
+            state.get("session_id") or "unknown",
+            "task_start",
+            {"task_id": state.get("task_id", "root") or "root",
+             "description": "multi-step plan", "subtask_count": len(plan.subtasks),
+             "created_at": time.time()},
+        )
+
     await worker_pool.start()
 
-    return {}
+    return {"_started_at": time.time()}
 
 
 async def _await_node(state: dict) -> dict:
@@ -141,7 +153,8 @@ async def _collect_node(state: dict) -> dict:
             "task_id": tid,
             "success": len(failed) == 0,
             "result_summary": response_text[:200],
-            "duration_ms": 0,
+            "duration_ms": round((time.time() - (state.get("_started_at") or 0)) * 1000, 1)
+            if state.get("_started_at") else 0,
         })
 
     # Phase 3: Fire-and-forget reflection
