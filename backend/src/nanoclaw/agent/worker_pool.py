@@ -251,6 +251,14 @@ class WorkerPool:
 
     # ── Helpers ──
 
+    async def emit_event(self, event: str, data: dict) -> None:
+        """Emit an SSE event through the pool's callback (public API).
+
+        Used by the dispatch node to emit ``agent_plan`` and other
+        graph-level events before workers start.
+        """
+        await self._emit(event, data)
+
     async def _emit(self, event: str, data: dict) -> None:
         """Emit an SSE event (non-fatal on failure)."""
         try:
@@ -264,6 +272,6 @@ class WorkerPool:
         return f"Execute subtasks for session {self.session_id}"
 
 
-def _null_sse_callback(event: str, data: dict) -> None:
+async def _null_sse_callback(event: str, data: dict) -> None:
     """Default no-op SSE callback."""
     pass
