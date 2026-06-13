@@ -40,6 +40,9 @@ export type SSEEventName =
   | "agent_think"
   | "agent_action"
   | "agent_observation"
+  | "agent_plan"
+  | "check_result"
+  | "iteration_exhausted"
   | "message_chunk"
   | "done"
   | "error"
@@ -82,6 +85,60 @@ export interface DoneData {
 }
 
 /** error — runtime error during agent execution */
+// ── Phase 2 event types ─────────────────────────────────
+
+export type TaskStatus =
+  | "PENDING"
+  | "RUNNING"
+  | "SUCCEEDED"
+  | "FAILED"
+  | "RETRYING"
+  | "CANCELLED"
+  | "COMPENSATING"
+  | "COMPENSATED"
+  | "COMPENSATION_FAILED"
+
+export interface SubtaskInfo {
+  id: string
+  description: string
+  status: TaskStatus
+  depends_on: string[]
+}
+
+/** agent_plan — Planner subtask DAG */
+export interface AgentPlanData {
+  tasks: SubtaskInfo[]
+  session_id: string
+}
+
+/** check_result — Checker evaluation outcome */
+export interface CheckResultData {
+  task_id: string
+  passed: boolean
+  feedback: string
+  failure_category?: "execution" | "planning"
+}
+
+/** check_result — per-criterion detail */
+export interface CheckCriterionResult {
+  text: string
+  passed: boolean
+  reason: string
+}
+
+/** iteration_exhausted — retry budget depleted */
+export interface IterationExhaustedData {
+  session_id: string
+  failed_subtask_ids: string[]
+  trajectory_paths: string[]
+  budget: {
+    global_count: number
+    global_max: number
+    per_subtask: Record<string, number>
+  }
+}
+
+
 export interface ErrorData {
   message: string
   task_id: string

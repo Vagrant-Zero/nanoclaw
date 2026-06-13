@@ -1,5 +1,10 @@
 import { useEffect, useState } from "react";
 import { Text } from "ink";
+import type {
+  SubtaskInfo,
+  CheckResultData,
+  IterationExhaustedData,
+} from "../types.js";
 
 interface Props {
   baseUrl: string;
@@ -8,14 +13,18 @@ interface Props {
   onThink?: (content: string) => void;
   onAction?: (tool: string, args: Record<string, unknown>) => void;
   onObservation?: (tool: string, result: string) => void;
+  onPlan?: (tasks: SubtaskInfo[]) => void;
+  onTaskStatus?: (taskId: string, status: string) => void;
+  onCheckResult?: (data: CheckResultData) => void;
+  onIterationExhausted?: (data: IterationExhaustedData) => void;
 }
 
 /**
  * Opens an SSE stream to /chat/stream, parses the protocol events.
  *
- * - agent_think / agent_action / agent_observation → forwarded as callbacks
- * - message_chunk → rendered inline as streaming answer text
- * - onDone fires with the accumulated answer text on stream completion
+ * Phase 1 events: agent_think, agent_action, agent_observation, message_chunk
+ * Phase 2 events: agent_plan, task_status, check_result, iteration_exhausted
+ * All forwarded to their respective callbacks.
  */
 export function StreamingChat({
   baseUrl,
@@ -24,6 +33,10 @@ export function StreamingChat({
   onThink,
   onAction,
   onObservation,
+  onPlan,
+  onTaskStatus,
+  onCheckResult,
+  onIterationExhausted,
 }: Props) {
   const [content, setContent] = useState("");
 
@@ -64,6 +77,18 @@ export function StreamingChat({
                 break;
               case "agent_observation":
                 onObservation?.(data.tool, data.result);
+                break;
+              case "agent_plan":
+                onPlan?.(data.tasks ?? []);
+                break;
+              case "task_status":
+                onTaskStatus?.(data.task_id, data.status);
+                break;
+              case "check_result":
+                onCheckResult?.(data);
+                break;
+              case "iteration_exhausted":
+                onIterationExhausted?.(data);
                 break;
               case "message_chunk":
                 fullText += data.content;

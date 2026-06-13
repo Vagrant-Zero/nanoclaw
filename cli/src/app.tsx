@@ -1,13 +1,15 @@
 import { render, Text, Box, useInput } from "ink";
 import { useEffect, useState } from "react";
 import TextInput from "ink-text-input";
-import { ChatMessage } from "./types.js";
+import { ChatMessage, SubtaskInfo, CheckResultData, IterationExhaustedData, TaskStatus } from "./types.js";
 import { MessageBubble } from "./components/MessageBubble.js";
 import { loadConfig } from "./config.js";
 import { StreamingChat } from "./components/StreamingChat.js";
 import { StatusBar } from "./components/bar.js";
 import { ThinkingBlock } from "./components/ThinkingBlock.js";
 import { ToolCallCard } from "./components/ToolCallCard.js";
+import { PlanView } from "./components/PlanView.js";
+import { CheckResultsPanel } from "./components/CheckResultBadge.js";
 
 const config = await loadConfig();
 
@@ -17,17 +19,29 @@ interface ToolCallState {
   result?: string;
 }
 
+interface CheckResultEntry {
+  task_id: string;
+  passed: boolean;
+  feedback: string;
+}
+
 function App() {
   useEffect(() => {
     console.log("base_url:", config.baseUrl);
   }, []);
 
+  // Phase 1 state
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [thinkText, setThinkText] = useState<string>("");
   const [toolCalls, setToolCalls] = useState<ToolCallState[]>([]);
   const [streamingMsg, setStreamingMsg] = useState<string | null>(null);
   const [exiting, setExiting] = useState(false);
   const [input, setInput] = useState<string>("");
+
+  // Phase 2 state
+  const [currentPlan, setCurrentPlan] = useState<SubtaskInfo[]>([]);
+  const [checkResults, setCheckResults] = useState<CheckResultEntry[]>([]);
+  const [budgetExhausted, setBudgetExhausted] = useState<IterationExhaustedData | null>(null);
 
   useInput((_data, key) => {
     if (key.escape) {
@@ -44,6 +58,9 @@ function App() {
     setMessages((prev) => [...prev, { content: value, role: "user" }]);
     setThinkText("");
     setToolCalls([]);
+    setCurrentPlan([]);
+    setCheckResults([]);
+    setBudgetExhausted(null);
     setStreamingMsg(value);
     setInput("");
   };
@@ -64,6 +81,20 @@ function App() {
       {messages.map((msg, i) => (
         <MessageBubble key={i} content={msg.content} role={msg.role} />
       ))}
+
+      {/* Phase 2: plan view (subtask DAG) */}
+      {currentPlan.length > 0 && <PlanView tasks={currentPlan} />}
+
+      {/* Phase 2: check results */}
+      {checkResults.length > 0 && (
+        <CheckResultsPanel
+          results={checkResults.map((r) => ({
+            text: r.feedback,
+            passed: r.passed,
+            reason: r.feedback,
+          }))}
+        />
+      )}
 
       {/* Thinking text — single block, cumulative */}
       {thinkText.length > 0 && <ThinkingBlock content={thinkText} />}
@@ -97,7 +128,44 @@ function App() {
               )
             )
           }
+          onPlan={(tasks) => setCurrentPlan(tasks)}
+          onTaskStatus={(taskId, status) =>
+            setCurrentPlan((prev) =>
+              prev.map((t) => (t.id === taskId ? { ...t, status: status as TaskStatus } : t))
+            )
+          }
+          onCheckResult={(data) =>
+            setCheckResults((prev) => [
+              ...prev,
+              {
+                task_id: data.task_id,
+                passed: data.passed,
+                feedback: data.feedback,
+              },
+            ])
+          }
+          onIterationExhausted={(data) => setBudgetExhausted(data)}
         />
+      )}
+
+      {/* Budget exhausted warning */}
+      {budgetExhausted && (
+        <Box
+          flexDirection="column"
+          padding={1}
+          borderStyle="round"
+          borderColor="red"
+        >
+          <Text bold color="red">
+            Iteration Budget Exhausted
+          </Text>
+          <Text>
+            Failed subtasks: {budgetExhausted.failed_subtask_ids.join(", ")}
+          </Text>
+          <Text dimColor>
+            Options: Cancel the task or adjust parameters and resume.
+          </Text>
+        </Box>
       )}
 
       <Box>
