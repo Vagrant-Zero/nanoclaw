@@ -9,9 +9,11 @@ from nanoclaw.eval.events import (
     ToolCallEvent,
     UserFeedbackEvent,
 )
+from nanoclaw.eval.logger import EventLogger
 
 __all__ = [
     "ContextStatsEvent",
+    "EventLogger",
     "LlmCallEvent",
     "TaskEndEvent",
     "TaskStartEvent",
