@@ -119,8 +119,8 @@ def create_app() -> FastAPI:
         task_queue = MemoryQueue()
         worker_react_agent = create_react_agent(
             llm, tool_registry, sse_callback=sse_callback,
-            context_manager=app.state.context_manager,
-            event_logger=app.state.event_logger,
+            context_manager=getattr(app.state, "context_manager", None),
+            event_logger=getattr(app.state, "event_logger", None),
         )
         worker_pool = WorkerPool(
             task_queue=task_queue,
