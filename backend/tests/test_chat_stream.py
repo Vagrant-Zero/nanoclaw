@@ -42,8 +42,16 @@ async def test_chat_stream_error_when_no_api_key(monkeypatch) -> None:
             assert "task_status" in event_types
 
 
+
+def _has_real_api_key() -> bool:
+    """True if a non-placeholder API key is configured via .env."""
+    from nanoclaw.config import settings
+    key = settings.openai_api_key or ""
+    return bool(key) and not key.startswith("sk-test")
+
+
 @pytest.mark.asyncio
-@pytest.mark.skip(reason="E2E: requires real API key; task_id naming changed in Phase 4")
+@pytest.mark.skipif(not _has_real_api_key(), reason="E2E: requires real API key in backend/.env")
 async def test_chat_stream_tool_call_sse_events() -> None:
     """Verify that a tool-calling request produces the full SSE protocol:
     task_status → agent_think → agent_action → agent_observation →
