@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Text } from "ink";
 import type {
   SubtaskInfo,
@@ -42,69 +42,99 @@ export function StreamingChat({
   onExperience,
 }: Props) {
   const [content, setContent] = useState("");
+  const [error, setError] = useState<string | null>(null);
+  const [connected, setConnected] = useState(false);
+  const onDoneRef = useRef(onDone);
+  onDoneRef.current = onDone;
 
   useEffect(() => {
     if (!message) return;
     let cancelled = false;
+    let fullText = "";
 
     const run = async () => {
-      const res = await fetch(`${baseUrl}/chat/stream`, {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message }),
-      });
-      const reader = res.body!.getReader();
-      const decoder = new TextDecoder();
-      let currentEvent = "";
-      let fullText = "";
+      try {
+        const res = await fetch(`${baseUrl}/chat/stream`, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message }),
+        });
 
-      while (true) {
-        const { done, value } = await reader.read();
-        if (done || cancelled) break;
+        if (!res.ok) {
+          const body = await res.text().catch(() => "");
+          setError(`Backend error: HTTP ${res.status}${body ? ` — ${body.slice(0, 200)}` : ""}`);
+          return;
+        }
 
-        const text = decoder.decode(value, { stream: true });
-        const lines = text.split(/\r?\n/);
+        if (!res.body) {
+          setError("Backend returned empty response body");
+          return;
+        }
 
-        for (const line of lines) {
-          if (!line) continue;
-          if (line.startsWith("event: ")) {
-            currentEvent = line.slice(7);
-          } else if (line.startsWith("data: ")) {
-            const data = JSON.parse(line.slice(6));
-            switch (currentEvent) {
-              case "agent_think":
-                onThink?.(data.content);
-                break;
-              case "agent_action":
-                onAction?.(data.tool, data.args);
-                break;
-              case "agent_observation":
-                onObservation?.(data.tool, data.result);
-                break;
-              case "agent_plan":
-                onPlan?.(data.tasks ?? []);
-                break;
-              case "task_status":
-                onTaskStatus?.(data.task_id, data.status);
-                break;
-              case "check_result":
-                onCheckResult?.(data);
-                break;
-              case "iteration_exhausted":
-                onIterationExhausted?.(data);
-                break;
-              case "experience_ready":
-                onExperience?.(data);
-                break;
-              case "message_chunk":
-                fullText += data.content;
-                setContent(fullText);
-                break;
+        setConnected(true);
+        const reader = res.body.getReader();
+        const decoder = new TextDecoder();
+        let currentEvent = "";
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done || cancelled) break;
+
+          const text = decoder.decode(value, { stream: true });
+          const lines = text.split(/\r?\n/);
+
+          for (const line of lines) {
+            if (!line) continue;
+            if (line.startsWith("event: ")) {
+              currentEvent = line.slice(7);
+            } else if (line.startsWith("data: ")) {
+              const data = JSON.parse(line.slice(6));
+              switch (currentEvent) {
+                case "agent_think":
+                  onThink?.(data.content);
+                  break;
+                case "agent_action":
+                  onAction?.(data.tool, data.args);
+                  break;
+                case "agent_observation":
+                  onObservation?.(data.tool, data.result);
+                  break;
+                case "agent_plan":
+                  onPlan?.(data.tasks ?? []);
+                  break;
+                case "task_status":
+                  onTaskStatus?.(data.task_id, data.status);
+                  break;
+                case "check_result":
+                  onCheckResult?.(data);
+                  break;
+                case "iteration_exhausted":
+                  onIterationExhausted?.(data);
+                  break;
+                case "experience_ready":
+                  onExperience?.(data);
+                  break;
+                case "error":
+                  setError(data.message || "Backend error");
+                  break;
+                case "message_chunk":
+                  fullText += data.content;
+                  setContent(fullText);
+                  break;
+              }
             }
           }
         }
+      } catch (err: any) {
+        if (!cancelled) {
+          setError(err?.message || "Connection failed");
+        }
+        return;
       }
-      if (!cancelled) onDone(fullText);
+
+      if (!cancelled) {
+        onDoneRef.current(fullText);
+      }
     };
 
     run();
@@ -113,5 +143,19 @@ export function StreamingChat({
     };
   }, [message]);
 
+  if (error) {
+    return <Text color="red">Error: {error}</Text>;
+  }
+
+  if (!connected) {
+    return <Text dimColor>Connecting...</Text>;
+  }
+
+  if (!content) {
+    return <Text dimColor italic>Thinking...</Text>;
+  }
+
   return <Text>{content}</Text>;
 }
+
+export default StreamingChat;

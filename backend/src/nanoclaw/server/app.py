@@ -76,6 +76,7 @@ async def lifespan(app: FastAPI):
     """Startup: initialize storage backends, create services.
     Shutdown: flush logs and close connections."""
     # ── Phase 5: Initialize infrastructure if configured ──────
+    # Fail fast: if DB/Redis is configured but unreachable, crash at startup.
     if settings.db_url:
         await init_db()
     if settings.redis_url:
@@ -292,7 +293,18 @@ def create_app() -> FastAPI:
             # Background graph execution
             async def run_graph() -> None:
                 try:
-                    await supervisor.ainvoke(initial_state)
+                    result = await supervisor.ainvoke(initial_state)
+                    # Emit the final response as message_chunk so the
+                    # StreamingChat component receives it and onDone
+                    # has the full text.
+                    msgs = result.get("messages", [])
+                    if msgs:
+                        final = msgs[-1]
+                        if hasattr(final, "content") and final.content:
+                            await sse_queue.put({
+                                "event": "message_chunk",
+                                "data": {"content": final.content},
+                            })
                 except asyncio.CancelledError:
                     pass
                 except Exception as exc:

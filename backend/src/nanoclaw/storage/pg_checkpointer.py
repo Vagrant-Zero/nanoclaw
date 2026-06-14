@@ -29,7 +29,7 @@ class PgCheckpointer(Checkpointer):
             await s.execute(
                 text("""
                     UPDATE sessions
-                    SET serialized_state = :state::jsonb
+                    SET serialized_state = CAST(:state AS JSONB)
                     WHERE id = :session_id
                 """),
                 {
@@ -52,7 +52,7 @@ class PgCheckpointer(Checkpointer):
             ).fetchone()
         if row is None or row.serialized_state is None:
             return None
-        return CheckpointState.from_dict(json.loads(row.serialized_state))
+        return CheckpointState.from_dict(row.serialized_state if isinstance(row.serialized_state, (dict, list)) else json.loads(row.serialized_state))
 
     async def list_sessions(self) -> list[str]:
         async with get_session() as s:

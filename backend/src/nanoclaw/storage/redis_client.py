@@ -21,11 +21,17 @@ _redis: Redis | None = None
 
 
 async def get_redis() -> Redis:
-    """Return the shared Redis connection, creating it if necessary."""
+    """Return the shared Redis connection, creating it if necessary.
+
+    Verifies the connection with a ``PING`` command so failures
+    surface immediately at startup (fail fast).
+    """
     global _redis
     if _redis is None:
         url = settings.redis_url or "redis://localhost:6379/0"
         _redis = Redis.from_url(url, decode_responses=True)
+        # Verify connection — crash now if Redis is unreachable
+        await _redis.ping()
     return _redis
 
 

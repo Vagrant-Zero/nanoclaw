@@ -32,9 +32,9 @@ class PgTaskRepo(TaskRepository):
             await s.execute(
                 text("""
                     INSERT INTO task_plans (session_id, plan_id, data, created_at)
-                    VALUES (:session_id, :plan_id, :data::jsonb, :created_at)
+                    VALUES (:session_id, :plan_id, CAST(:data AS JSONB), :created_at)
                     ON CONFLICT (session_id, plan_id)
-                    DO UPDATE SET data = :data::jsonb
+                    DO UPDATE SET data = CAST(:data AS JSONB)
                 """),
                 {
                     "session_id": session_id,
@@ -59,7 +59,7 @@ class PgTaskRepo(TaskRepository):
             ).fetchone()
         if row is None:
             return None
-        return TaskPlan.from_dict(json.loads(row.data))
+        return TaskPlan.from_dict(row.data if isinstance(row.data, (dict, list)) else json.loads(row.data))
 
     async def update_subtask(self, session_id: str, subtask: Subtask) -> None:
         """Read current plan, find and replace the subtask, write back.

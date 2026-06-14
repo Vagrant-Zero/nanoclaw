@@ -23,6 +23,9 @@ from nanoclaw.agent.checker.checker import Checker
 from nanoclaw.agent.checker.iteration_budget import IterationBudget
 from nanoclaw.models.task import Subtask, TaskStatus
 
+# Compensation: exit code constants
+_COMPENSATION_OK = 0
+
 if TYPE_CHECKING:
     from nanoclaw.storage.session_repo import SessionRepository
     from nanoclaw.storage.task_queue import TaskQueue
@@ -194,7 +197,11 @@ class WorkerPool:
             await self._handle_planning_failure(subtask)
 
     async def _handle_execution_failure(self, subtask: Subtask) -> None:
-        """Retry execution failures (budget permitting)."""
+        """Retry execution failures (budget permitting).
+
+        When retries are exhausted, attempt cascading rollback compensation
+        if the subtask has a compensation command defined.
+        """
         # Check budget first, then increment — avoids inflated count in
         # the error message when budget is already exhausted.
         budget_ok = await self._iteration_budget.try_consume(subtask.id)
@@ -218,10 +225,17 @@ class WorkerPool:
                     "per_subtask": self._iteration_budget.state.per_subtask,
                 },
             })
-            await self._task_queue.fail(
-                subtask.id,
-                f"Iteration budget exhausted (retried {subtask.retry_count}x)",
-            )
+
+            # Attempt cascading rollback compensation
+            compensated = await self._run_compensation(subtask)
+            if compensated:
+                await self._task_queue.compensate(subtask.id, success=True)
+            else:
+                await self._task_queue.compensate(
+                    subtask.id,
+                    success=False,
+                    error=f"Iteration budget exhausted (retried {subtask.retry_count}x)",
+                )
 
     async def _handle_planning_failure(self, subtask: Subtask) -> None:
         """Planning failures → mark FAILED; collector decides next step."""
@@ -240,6 +254,62 @@ class WorkerPool:
             subtask.id,
             f"Execution timed out after {_WORKER_TIMEOUT_SECONDS}s",
         )
+
+    async def _run_compensation(self, subtask: Subtask) -> bool:
+        """Execute a subtask's compensation command for cascading rollback.
+
+        Returns True if compensation succeeded (COMPENSATED), False if
+        it failed or no compensation command is defined (COMPENSATION_FAILED).
+        """
+        cmd = subtask.compensation
+        if not cmd:
+            return False  # No compensation defined — simple fail
+
+        await self._emit("task_status", {
+            "task_id": subtask.id, "status": "COMPENSATING",
+        })
+        subtask.status = TaskStatus.COMPENSATING
+
+        try:
+            proc = await asyncio.create_subprocess_shell(
+                cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await asyncio.wait_for(
+                proc.communicate(), timeout=30.0,
+            )
+            if proc.returncode == _COMPENSATION_OK:
+                subtask.status = TaskStatus.COMPENSATED
+                await self._emit("task_status", {
+                    "task_id": subtask.id, "status": "COMPENSATED",
+                })
+                return True
+
+            error_msg = stderr.decode().strip() or f"exit code {proc.returncode}"
+            subtask.status = TaskStatus.COMPENSATION_FAILED
+            subtask.error = f"Compensation failed: {error_msg}"
+            await self._emit("task_status", {
+                "task_id": subtask.id, "status": "COMPENSATION_FAILED",
+                "error": subtask.error,
+            })
+            return False
+        except asyncio.TimeoutError:
+            subtask.status = TaskStatus.COMPENSATION_FAILED
+            subtask.error = "Compensation timed out after 30s"
+            await self._emit("task_status", {
+                "task_id": subtask.id, "status": "COMPENSATION_FAILED",
+                "error": subtask.error,
+            })
+            return False
+        except Exception as exc:
+            subtask.status = TaskStatus.COMPENSATION_FAILED
+            subtask.error = f"Compensation error: {exc}"
+            await self._emit("task_status", {
+                "task_id": subtask.id, "status": "COMPENSATION_FAILED",
+                "error": subtask.error,
+            })
+            return False
 
     async def _on_error(self, subtask: Subtask, exc: Exception) -> None:
         """Unexpected error during execution."""

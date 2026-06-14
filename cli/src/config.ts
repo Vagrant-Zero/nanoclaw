@@ -7,7 +7,8 @@ const CONFIG_PATH = join(CONFIG_DIR, "config.json")
 
 const DEFAULT_CONFIG: Config = {
     baseUrl: "http://127.0.0.1:8420",
-    default_model: "deepseek-v4-pro"
+    default_model: "deepseek-v4-pro",
+    apiKey: undefined,
 }
 
 export async function loadConfig(): Promise<Config> {

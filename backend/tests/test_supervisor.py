@@ -12,7 +12,11 @@ from langchain_openai import ChatOpenAI
 from nanoclaw.agent.nodes.router import create_router_node
 from nanoclaw.agent.supervisor_graph import create_supervisor
 from nanoclaw.models.chat import Session as ChatSession
+from nanoclaw.config import settings
 from nanoclaw.storage.session_repo import MemorySessionRepo
+
+# Skip E2E tests when no API key is configured
+_e2e_skip = not bool(settings.openai_api_key)
 from nanoclaw.tools.file_ops import ReadFileTool
 from nanoclaw.tools.registry import ToolRegistry
 from nanoclaw.tools.shell import RunShellTool
@@ -100,6 +104,7 @@ class TestCreateSupervisor:
         assert "await_results" in nodes
         assert "collect" in nodes
 
+@pytest.mark.skipif(_e2e_skip, reason="NANOCLAW_OPENAI_API_KEY or OPENAI_API_KEY not set in .env")
 class TestE2E:
     """End-to-end: graph invoke through DeepSeek API."""
 

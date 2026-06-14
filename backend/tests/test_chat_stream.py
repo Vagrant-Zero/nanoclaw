@@ -10,8 +10,19 @@ from httpx import ASGITransport, AsyncClient
 from nanoclaw.server.app import create_app
 
 
+def _clear_deps_cache(monkeypatch=None) -> None:
+    import nanoclaw.server.deps as deps
+    deps._session_repo = None
+    deps._task_repo = None
+    deps._checkpointer = None
+    # Force memory mode regardless of .env settings
+    if monkeypatch is not None:
+        monkeypatch.setattr("nanoclaw.server.deps.is_production", lambda: False)
+
+
 @pytest.mark.asyncio
-async def test_health_returns_ok() -> None:
+async def test_health_returns_ok(monkeypatch) -> None:
+    _clear_deps_cache(monkeypatch)
     app = create_app()
     transport = ASGITransport(app=app)
     async with AsyncClient(transport=transport, base_url="http://test") as client:
@@ -24,6 +35,7 @@ async def test_health_returns_ok() -> None:
 
 @pytest.mark.asyncio
 async def test_chat_stream_error_when_no_api_key(monkeypatch) -> None:
+    _clear_deps_cache(monkeypatch)
     """Verify /chat/stream returns error event when no valid API key is configured."""
 
     monkeypatch.setenv("OPENAI_API_KEY", "sk-test")

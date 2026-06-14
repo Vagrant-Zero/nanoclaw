@@ -41,6 +41,11 @@ class TaskQueue(ABC):
         """Mark a subtask failed; mark all downstream as CANCELLED."""
 
     @abstractmethod
+    async def compensate(self, task_id: str, success: bool, error: str = "") -> None:
+        """Mark a subtask compensated (status COMPENSATED or COMPENSATION_FAILED);
+        cascade cancel downstream. Called after budget-exhausted compensation."""
+
+    @abstractmethod
     async def wait_for_all(self) -> dict[str, str | None]:
         """Block until all subtasks reach a terminal state.
 
@@ -145,6 +150,26 @@ class MemoryQueue(TaskQueue):
             self._events[task_id].set()
 
             # Cancel all downstream tasks
+            for downstream in self._rdag.get(task_id, []):
+                dt = self._tasks.get(downstream)
+                if dt is not None:
+                    dt.status = TaskStatus.CANCELLED
+                    self._events[downstream].set()
+
+    async def compensate(self, task_id: str, success: bool, error: str = "") -> None:
+        """Mark a subtask compensated (COMPENSATED or COMPENSATION_FAILED)
+        and cascade cancel all downstream tasks."""
+        async with self._lock:
+            task = self._tasks.get(task_id)
+            if task is None:
+                msg = f"Task {task_id!r} not found"
+                raise ValueError(msg)
+            task.status = TaskStatus.COMPENSATED if success else TaskStatus.COMPENSATION_FAILED
+            if not success and error:
+                task.error = error
+            self._events[task_id].set()
+
+            # Cancel all downstream (same as fail())
             for downstream in self._rdag.get(task_id, []):
                 dt = self._tasks.get(downstream)
                 if dt is not None:

@@ -187,6 +187,31 @@ class RedisQueue(TaskQueue):
         await self._cascade_cancel(task_id)
         self._check_all_done(redis)
 
+    async def compensate(self, task_id: str, success: bool, error: str = "") -> None:
+        """Mark a subtask compensated (COMPENSATED or COMPENSATION_FAILED)
+        and cascade cancel all downstream."""
+        redis = await get_redis()
+        task = self._tasks.get(task_id)
+        if task is None:
+            msg = f"Task {task_id!r} not found"
+            raise ValueError(msg)
+
+        status = TaskStatus.COMPENSATED if success else TaskStatus.COMPENSATION_FAILED
+        task.status = status
+        if not success and error:
+            task.error = error
+        self._completed_count += 1
+
+        await redis.zrem(self._leases, task_id)
+        await redis.hset(self._task_key(task_id), mapping={
+            "status": status.value,
+            "error": error,
+        })
+
+        # Cancel all downstream (same as fail path)
+        await self._cascade_cancel(task_id)
+        self._check_all_done(redis)
+
     async def wait_for_all(self) -> dict[str, str | None]:
         """Block until all subtasks reach a terminal state.
 

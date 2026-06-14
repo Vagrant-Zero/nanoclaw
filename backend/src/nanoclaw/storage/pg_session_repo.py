@@ -34,7 +34,7 @@ class PgSessionRepo(SessionRepository):
             await s.execute(
                 text("""
                     INSERT INTO sessions (id, created_at, history, active_plan_id)
-                    VALUES (:id, :created_at, :history::jsonb, :active_plan_id)
+                    VALUES (:id, :created_at, CAST(:history AS JSONB), :active_plan_id)
                 """),
                 {
                     "id": session.id,
@@ -64,7 +64,12 @@ class PgSessionRepo(SessionRepository):
             ).fetchone()
         if row is None:
             return None
-        messages = [ChatMessage.from_dict(m) for m in json.loads(row.history)]
+        # row.history is already a Python list (JSONB auto-deserialized by asyncpg)
+        if isinstance(row.history, str):
+            raw = json.loads(row.history)
+        else:
+            raw = list(row.history)
+        messages = [ChatMessage.from_dict(m) for m in raw]
         # active_plan_id is read for round-trip preservation; the full
         # TaskPlan is loaded separately via TaskRepository.get_plan().
         return Session(
@@ -85,11 +90,12 @@ class PgSessionRepo(SessionRepository):
             if row is None:
                 msg_text = f"Session {session_id!r} not found"
                 raise ValueError(msg_text)
-            history = json.loads(row.history)
+            # row.history is a Python list (JSONB auto-deserialized by asyncpg)
+            history = list(row.history) if isinstance(row.history, list) else json.loads(row.history)
             history.append(msg.to_dict())
             await s.execute(
                 text("""
-                    UPDATE sessions SET history = :history::jsonb
+                    UPDATE sessions SET history = CAST(:history AS JSONB)
                     WHERE id = :id
                 """),
                 {"id": session_id, "history": json.dumps(history)},
@@ -107,4 +113,6 @@ class PgSessionRepo(SessionRepository):
         if row is None:
             msg_text = f"Session {session_id!r} not found"
             raise ValueError(msg_text)
-        return [ChatMessage.from_dict(m) for m in json.loads(row.history)]
+                # row.history is a Python list (JSONB auto-deserialized by asyncpg)
+        raw = list(row.history) if isinstance(row.history, list) else json.loads(row.history)
+        return [ChatMessage.from_dict(m) for m in raw]

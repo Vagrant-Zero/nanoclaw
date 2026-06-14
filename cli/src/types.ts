@@ -23,6 +23,8 @@ export interface ChatResponse {
 export interface Config {
   baseUrl: string
   default_model: string
+  /** Backend LLM API key — read from .env or set manually */
+  apiKey?: string
 }
 
 export interface ExperienceEntry {
