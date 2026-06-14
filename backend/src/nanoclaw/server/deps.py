@@ -1,8 +1,8 @@
-"""FastAPI dependency injection helpers.
+"""FastAPI dependency injection — returns Memory or PG/Redis implementations.
 
-Provides singleton instances of LLM, supervisor graph, and storage
-repositories. These are created once at application startup and shared
-across all requests — not reconstructed per-request.
+Module-level singleton holders are populated once at first access.
+The implementation choice (Memory vs PG/Redis) is driven by the presence
+of ``NANOCLAW_DB_URL`` and ``NANOCLAW_REDIS_URL`` environment variables.
 """
 
 from __future__ import annotations
@@ -14,8 +14,84 @@ from langchain_openai import ChatOpenAI
 
 from nanoclaw.agent.supervisor_graph import create_supervisor
 from nanoclaw.config import settings
-from nanoclaw.storage.session_repo import MemorySessionRepo, SessionRepository
+from nanoclaw.storage.checkpointer import Checkpointer, LocalFileCheckpointer
+from nanoclaw.storage.session_repo import SessionRepository
+from nanoclaw.storage.task_queue import TaskQueue
+from nanoclaw.storage.task_repo import TaskRepository
 from nanoclaw.tools.registry import ToolRegistry
+
+# Module-level singleton holders — set once at startup
+_session_repo: SessionRepository | None = None
+_task_repo: TaskRepository | None = None
+_checkpointer: Checkpointer | None = None
+
+
+def is_production() -> bool:
+    """Return True if PostgreSQL is configured."""
+    return settings.db_url is not None
+
+
+def get_session_repo() -> SessionRepository:
+    """Return SessionRepository: PgSessionRepo if db_url is set, else MemorySessionRepo."""
+    global _session_repo
+    if _session_repo is not None:
+        return _session_repo
+    if is_production():
+        from nanoclaw.storage.pg_session_repo import PgSessionRepo
+        _session_repo = PgSessionRepo()
+    else:
+        from nanoclaw.storage.session_repo import MemorySessionRepo
+        _session_repo = MemorySessionRepo()
+    return _session_repo
+
+
+def get_task_repo() -> TaskRepository:
+    """Return TaskRepository: PgTaskRepo if db_url is set, else MemoryTaskRepo."""
+    global _task_repo
+    if _task_repo is not None:
+        return _task_repo
+    if is_production():
+        from nanoclaw.storage.pg_task_repo import PgTaskRepo
+        _task_repo = PgTaskRepo()
+    else:
+        from nanoclaw.storage.task_repo import MemoryTaskRepo
+        _task_repo = MemoryTaskRepo()
+    return _task_repo
+
+
+def get_checkpointer() -> Checkpointer:
+    """Return Checkpointer: PgCheckpointer if db_url is set, else LocalFileCheckpointer."""
+    global _checkpointer
+    if _checkpointer is not None:
+        return _checkpointer
+    if is_production():
+        from nanoclaw.storage.pg_checkpointer import PgCheckpointer
+        _checkpointer = PgCheckpointer()
+    else:
+        _checkpointer = LocalFileCheckpointer()
+    return _checkpointer
+
+
+def get_scheduled_task_repo() -> Any:
+    """Return ScheduledTaskRepo: PgScheduledTaskRepo if db_url is set, else Memory."""
+    if is_production():
+        from nanoclaw.scheduler.pg_repo import PgScheduledTaskRepo
+        return PgScheduledTaskRepo()
+    from nanoclaw.scheduler.repo import MemoryScheduledTaskRepo
+    return MemoryScheduledTaskRepo()
+
+
+def create_queue(session_id: str) -> TaskQueue:
+    """Factory: returns RedisQueue if redis_url is set, else MemoryQueue.
+
+    Unlike the repo singletons, queue instances are per-session and must
+    be created fresh each time.
+    """
+    if settings.redis_url is not None:
+        from nanoclaw.storage.redis_queue import RedisQueue
+        return RedisQueue(session_id)
+    from nanoclaw.storage.task_queue import MemoryQueue
+    return MemoryQueue()
 
 
 @lru_cache
@@ -49,16 +125,6 @@ def get_tool_registry() -> ToolRegistry:
     registry.register(RunShellTool())
     registry.register(WebSearchTool())
     return registry
-
-
-@lru_cache
-def get_session_repo() -> SessionRepository:
-    """Create the session repository (singleton).
-
-    Phase 1: MemorySessionRepo (in-process dict).
-    Phase 5+: swap to PgSessionRepo.
-    """
-    return MemorySessionRepo()
 
 
 @lru_cache

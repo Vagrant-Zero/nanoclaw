@@ -36,3 +36,13 @@ verify:
 clean:
 	rm -rf backend/dist backend/*.egg-info backend/.venv
 	rm -rf cli/dist cli/node_modules
+
+# Docker infrastructure
+docker:
+	docker compose up --wait --remove-orphans
+
+docker-down:
+	docker compose down
+
+docker-logs:
+	docker compose logs -f

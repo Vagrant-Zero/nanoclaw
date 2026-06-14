@@ -7,9 +7,11 @@ from nanoclaw.scheduler.repo import (
     ScheduledTask,
     ScheduledTaskRepo,
 )
+from nanoclaw.scheduler.pg_repo import PgScheduledTaskRepo
 
 __all__ = [
     "MemoryScheduledTaskRepo",
+    "PgScheduledTaskRepo",
     "ScheduledTask",
     "ScheduledTaskRepo",
     "Scheduler",

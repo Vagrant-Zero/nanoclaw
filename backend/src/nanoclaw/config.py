@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # Set via NANOCLAW_HOME env var. Defaults to .nanoclaw in CWD.
     home: str = ".nanoclaw"
 
+    # Phase 5: Infrastructure URLs (None = use in-memory/fallback)
+    db_url: str | None = None
+    """PostgreSQL connection string, e.g. postgresql+asyncpg://user:pass@localhost:5432/db"""
+    redis_url: str | None = None
+    """Redis connection string, e.g. redis://localhost:6379/0"""
+    chroma_url: str | None = None
+    """ChromaDB HTTP endpoint, e.g. http://localhost:8001"""
+
     @computed_field  # type: ignore[misc]
     @property
     def chroma_persist_dir(self) -> str:

@@ -269,7 +269,7 @@ class ChromaMemoryStore(MemoryStore):
         return {"$and": [{"_tags": {"$contains": t}} for t in tags]}
 
     def _parse_results(self, raw: dict) -> list:
-        from nanoclaw.memory.types import MemoryEntry as ME
+        from nanoclaw.memory.types import MemoryEntry as ME, MemoryType as MT
 
         entries: list = []
         for i in range(len(raw["ids"][0])):
@@ -280,7 +280,7 @@ class ChromaMemoryStore(MemoryStore):
             tags = [t for t in raw_tags if t]
             entries.append(ME(
                 id=eid,
-                type=meta.get("type", "reflection"),
+                type=MT(meta.get("type", MT.REFLECTION.value)),
                 tags=tags,
                 content=doc or "",
                 source=meta.get("source", ""),
@@ -291,7 +291,7 @@ class ChromaMemoryStore(MemoryStore):
         return entries
 
     def _parse_single(self, raw: dict):
-        from nanoclaw.memory.types import MemoryEntry as ME
+        from nanoclaw.memory.types import MemoryEntry as ME, MemoryType as MT
 
         if not raw["ids"]:
             return None
@@ -300,7 +300,7 @@ class ChromaMemoryStore(MemoryStore):
         tags = [t for t in raw_tags if t]
         return ME(
             id=raw["ids"][0],
-            type=meta.get("type", "reflection"),
+            type=MT(meta.get("type", MT.REFLECTION.value)),
             tags=tags,
             content=raw["documents"][0] if raw.get("documents") else "",
             source=meta.get("source", ""),

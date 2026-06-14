@@ -1,4 +1,4 @@
-"""FastAPI application factory — Phase 3 with EventLogger, memory, and Reflection."""
+"""FastAPI application factory — Phase 5 with PostgreSQL + Redis support."""
 
 from __future__ import annotations
 
@@ -18,13 +18,25 @@ from starlette.responses import Response
 from nanoclaw.config import settings
 from nanoclaw.context import ContextManager
 from nanoclaw.dreaming import DreamingEngine, register_dreaming_tools
-from nanoclaw.tools.registry import ToolRegistry
 from nanoclaw.eval import EventLogger
 from nanoclaw.memory import create_memory_store, ReflectionEngine
 from nanoclaw.models.chat import ChatMessage, Session as ChatSession
 from nanoclaw.scheduler import MemoryScheduledTaskRepo, Scheduler, ScheduledTask
 from nanoclaw.scheduler.cron import parse_cron
-from nanoclaw.server.deps import get_llm, get_session_repo, get_supervisor, get_tool_registry
+from nanoclaw.server.deps import (
+    create_queue,
+    get_checkpointer,
+    get_llm,
+    get_scheduled_task_repo,
+    get_session_repo,
+    get_supervisor,
+    get_task_repo,
+    get_tool_registry,
+    is_production,
+)
+from nanoclaw.storage.db import close_db, init_db
+from nanoclaw.storage.redis_client import close_redis, get_redis
+from nanoclaw.tools.registry import ToolRegistry
 
 
 class ChatRequest(BaseModel):
@@ -61,8 +73,15 @@ class ChatResponse(BaseModel):
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
-    """Startup: create EventLogger, MemoryStore, ReflectionEngine.
-    Shutdown: flush and close EventLogger."""
+    """Startup: initialize storage backends, create services.
+    Shutdown: flush logs and close connections."""
+    # ── Phase 5: Initialize infrastructure if configured ──────
+    if settings.db_url:
+        await init_db()
+    if settings.redis_url:
+        await get_redis()
+
+    # ── Phase 3: EventLogger, MemoryStore, ReflectionEngine ────
     event_logger = EventLogger(settings.eval_dir)
     memory_store = create_memory_store(settings.chroma_persist_dir)
     llm = get_llm()
@@ -74,7 +93,7 @@ async def lifespan(app: FastAPI):
     app.state.reflection_engine = reflection_engine
     app.state.context_manager = context_manager
 
-    # Phase 4: Dreaming + Scheduler
+    # ── Phase 4: Dreaming + Scheduler ──────────────────────────
     dreaming_registry = ToolRegistry()
     register_dreaming_tools(
         dreaming_registry, settings.eval_dir,
@@ -88,7 +107,9 @@ async def lifespan(app: FastAPI):
         dreaming_tools=dreaming_registry,
         eval_base_dir=settings.eval_dir,
     )
-    sched_task_repo = MemoryScheduledTaskRepo()
+
+    # Phase 5: Use PgScheduledTaskRepo if db_url is set, else memory
+    sched_task_repo = get_scheduled_task_repo()
     scheduler = Scheduler(
         task_repo=sched_task_repo,
         session_repo=get_session_repo(),
@@ -107,6 +128,10 @@ async def lifespan(app: FastAPI):
 
     await scheduler.stop()
     await event_logger.close()
+
+    # Phase 5: Close infrastructure connections
+    await close_db()
+    await close_redis()
 
 
 def create_app() -> FastAPI:
@@ -142,11 +167,12 @@ def create_app() -> FastAPI:
                 ChatSession(id=session_id, created_at=time.time())
             )
 
-        from nanoclaw.storage.task_queue import MemoryQueue
-        from nanoclaw.agent.worker_pool import WorkerPool
-        from nanoclaw.agent.nodes.react_agent import create_react_agent
+        # Per-request queue: MemoryQueue or RedisQueue based on config
+        task_queue = create_queue(session_id)
 
-        task_queue = MemoryQueue()
+        from nanoclaw.agent.nodes.react_agent import create_react_agent
+        from nanoclaw.agent.worker_pool import WorkerPool
+
         worker_agent = create_react_agent(llm, tool_registry)
         worker_pool = WorkerPool(
             task_queue=task_queue, react_agent=worker_agent, llm=llm,
@@ -208,9 +234,8 @@ def create_app() -> FastAPI:
         # Per-request task queue and worker pool
         from nanoclaw.agent.nodes.react_agent import create_react_agent
         from nanoclaw.agent.worker_pool import WorkerPool
-        from nanoclaw.storage.task_queue import MemoryQueue
 
-        task_queue = MemoryQueue()
+        task_queue = create_queue(session_id)
         worker_react_agent = create_react_agent(
             llm, tool_registry, sse_callback=sse_callback,
             context_manager=getattr(app.state, "context_manager", None),

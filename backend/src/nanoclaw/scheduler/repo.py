@@ -1,4 +1,4 @@
-"""ScheduledTask data model and repository with Memory + PG stubs."""
+"""ScheduledTask data model and repository with Memory implementation."""
 
 from __future__ import annotations
 
@@ -106,28 +106,4 @@ class MemoryScheduledTaskRepo(ScheduledTaskRepo):
             if hasattr(task, key):
                 setattr(task, key, value)
         return task
-
-
-class PgScheduledTaskRepo(ScheduledTaskRepo):
-    """PostgreSQL implementation — Phase 5."""
-
-    async def create(self, task: ScheduledTask) -> ScheduledTask:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def get_due_tasks(self) -> list[ScheduledTask]:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def update_last_run(self, task_id: str, timestamp: str) -> None:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def list_all(self) -> list[ScheduledTask]:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def get(self, task_id: str) -> ScheduledTask | None:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def delete(self, task_id: str) -> None:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
-
-    async def update(self, task_id: str, updates: dict[str, Any]) -> ScheduledTask | None:
-        raise NotImplementedError("PgScheduledTaskRepo in Phase 5")
+# Phase 5: PgScheduledTaskRepo moved to scheduler/pg_repo.py

@@ -1,0 +1,44 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    ports:
+      - "5432:5432"
+    environment:
+      POSTGRES_USER: nanoclaw
+      POSTGRES_PASSWORD: nanoclaw_dev
+      POSTGRES_DB: nanoclaw
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      - ./backend/migrations/init.sql:/docker-entrypoint-initdb.d/init.sql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U nanoclaw"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+
+  chromadb:
+    image: chromadb/chroma:0.6.3
+    ports:
+      - "8001:8000"
+    environment:
+      IS_PERSISTENT: "TRUE"
+      PERSIST_DIRECTORY: /chroma/data
+    volumes:
+      - chromadata:/chroma/data
+
+volumes:
+  pgdata:
+  redisdata:
+  chromadata:
