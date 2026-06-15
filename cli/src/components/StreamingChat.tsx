@@ -134,8 +134,10 @@ export function StreamingChat({
         return;
       }
 
-      completed = true;
-      onDoneRef.current(fullTextRef.current, "");
+      if (!completed) {
+        completed = true;
+        onDoneRef.current(fullTextRef.current, "");
+      }
     };
 
     const dispatch = (event: string, data: unknown) => {

@@ -103,18 +103,16 @@ class AutoCompact:
 
         self.compression_count += 1
 
-        # Log compression stats (caller records via EventLogger if available)
-        if hasattr(llm, "_stats_hook") or True:
-            # Simple inline logging
-            import logging
-            logger = logging.getLogger(__name__)
-            logger.info(
-                "Context compacted: %d → %d tokens (%.0f%% reduction, %d compressions total)",
-                tokens_before,
-                tokens_after,
-                (1 - tokens_after / max(tokens_before, 1)) * 100,
-                self.compression_count,
-            )
+        # Log compression stats
+        import logging
+        logger = logging.getLogger(__name__)
+        logger.info(
+            "Context compacted: %d → %d tokens (%.0f%% reduction, %d compressions total)",
+            tokens_before,
+            tokens_after,
+            (1 - tokens_after / max(tokens_before, 1)) * 100,
+            self.compression_count,
+        )
 
         return messages
 
@@ -138,12 +136,10 @@ class AutoCompact:
         split = len(messages)
         for i in range(len(messages) - 1, -1, -1):
             if isinstance(messages[i], (HumanMessage, type(None))):
-                # Check if next message is an assistant message
-                if pairs_found >= keep_last_n:
+                pairs_found += 1
+                if pairs_found == keep_last_n:
                     split = i
                     break
-                # Count this as a turn start
-                pairs_found += 1
             # If we've searched everything and still haven't found enough pairs
         return split if pairs_found >= keep_last_n else 0
 

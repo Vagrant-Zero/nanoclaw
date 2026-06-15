@@ -97,6 +97,15 @@ async def _heartbeat_loop() -> None:
             if failures >= _MAX_HEARTBEAT_FAILURES:
                 logger.error("Redis heartbeat expired — reconnecting")
                 await _reconnect_redis()
+                failures = 0  # Reset failure counter regardless of outcome
+
+        # If _redis is None (e.g. previous reconnect also failed),
+        # attempt to re-establish the connection on the next cycle
+        if _redis is None:
+            try:
+                await _reconnect_redis()
+            except Exception:
+                pass  # Will retry on the next heartbeat cycle
 
 
 async def _reconnect_redis() -> None:

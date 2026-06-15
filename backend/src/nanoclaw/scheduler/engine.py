@@ -105,7 +105,7 @@ class Scheduler:
                 async with asyncio.timeout(_DISPATCH_TIMEOUT):
                     await self._check_and_dispatch()
             except asyncio.TimeoutError:
-                logger.warning("Scheduler dispatch cycle timed out (>{_DISPATCH_TIMEOUT}s) — continuing")
+                logger.warning(f"Scheduler dispatch cycle timed out (>{_DISPATCH_TIMEOUT}s) — continuing")
             except Exception:
                 logger.warning('Scheduler loop error', exc_info=True)  # Non-fatal — loop keeps running
             await asyncio.sleep(_SCHEDULER_POLL_SECONDS)
