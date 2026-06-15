@@ -25,11 +25,20 @@ class EventLogger:
         await logger.close()  # flush and stop all writers
     """
 
-    def __init__(self, base_dir: str | Path) -> None:
+    def __init__(
+        self,
+        base_dir: str | Path,
+        cleanup_ttl_days: int = 30,
+        disk_quota_mb: int = 500,
+    ) -> None:
         self._base = Path(base_dir)
         self._queues: dict[str, asyncio.Queue] = {}
         self._writers: dict[str, asyncio.Task] = {}
         self._closed = False
+        self._cleanup_ttl_days = cleanup_ttl_days
+        self._disk_quota_mb = disk_quota_mb
+        # Run cleanup on startup
+        asyncio.ensure_future(self._cleanup())
 
     # ── Public API ──
 
@@ -133,6 +142,74 @@ class EventLogger:
         await asyncio.to_thread(_write)
 
     # ── Helpers ──
+
+    async def _cleanup(self) -> None:
+        """Delete stale session directories based on TTL and disk quota."""
+        if not self._base.exists():
+            return
+
+        def _scan() -> list[tuple[str, float, int]]:
+            """Return list of (session_id, mtime, size_bytes) for each session."""
+            sessions: list[tuple[str, float, int]] = []
+            for child in self._base.iterdir():
+                if not child.is_dir():
+                    continue
+                mtime = child.stat().st_mtime
+                size = sum(
+                    f.stat().st_size for f in child.rglob("*") if f.is_file()
+                )
+                sessions.append((child.name, mtime, size))
+            return sessions
+
+        sessions = await asyncio.to_thread(_scan)
+
+        if not sessions:
+            return
+
+        now = time.time()
+
+        # Phase 1: Delete sessions older than TTL
+        kept: list[tuple[str, float, int]] = []
+        for sid, mtime, size in sessions:
+            age_days = (now - mtime) / 86400
+            if age_days > self._cleanup_ttl_days:
+                await self._delete_session_dir(sid)
+            else:
+                kept.append((sid, mtime, size))
+
+        if not kept:
+            return
+
+        # Phase 2: Enforce disk quota (delete oldest sessions first)
+        total_mb = sum(s for _, _, s in kept) / (1024 * 1024)
+        if total_mb <= self._disk_quota_mb:
+            return
+
+        # Sort oldest first and delete until under quota
+        kept.sort(key=lambda x: x[1])  # Sort by mtime ascending
+        for sid, _, _ in kept:
+            if total_mb <= self._disk_quota_mb:
+                break
+            dir_size = sum(s for s2, _, s in kept if s2 == sid)
+            await self._delete_session_dir(sid)
+            total_mb -= dir_size / (1024 * 1024)
+
+    async def _delete_session_dir(self, session_id: str) -> None:
+        """Remove an entire session directory."""
+        dir_path = self._base / session_id
+
+        def _rmtree() -> None:
+            import shutil
+            shutil.rmtree(str(dir_path), ignore_errors=True)
+
+        await asyncio.to_thread(_rmtree)
+
+        # Clean up in-memory references
+        if session_id in self._queues:
+            del self._queues[session_id]
+        if session_id in self._writers:
+            self._writers[session_id].cancel()
+            del self._writers[session_id]
 
     @staticmethod
     def _drain_queue(queue: asyncio.Queue) -> list:
