@@ -211,3 +211,12 @@ build_prompt()
 - [ ] 避免循环 import（在 `from __future__ import annotations` 下用 `TYPE_CHECKING` 隔离）
 
 **阶段 3（P3 — 动态类型保留审查）：** 遍历所有保留的 `Any`，标注保留原因。
+
+---
+
+## 后续优化
+
+| # | 优先级 | 问题 | 状态 |
+|---|--------|------|------|
+| 9 | P2 | message_chunk 逐 token 流式输出：当前 run_graph() 在 supervisor.ainvoke() 完成后才发送完整 content，需将 agent 的 ainvoke 改为 astream 并在 LLM streaming 回调中逐 token yield | ⬜ 待执行 |
+
