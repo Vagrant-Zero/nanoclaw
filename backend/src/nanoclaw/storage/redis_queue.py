@@ -37,6 +37,7 @@ class RedisQueue(TaskQueue):
         self.session_id = session_id
         # In-memory DAG mirrors (small, only mutated at init_plan)
         self._dag: dict[str, list[str]] = {}
+        self._pending_tasks: set[asyncio.Task] = set()
         self._rdag: dict[str, list[str]] = {}
         self._tasks: dict[str, Subtask] = {}
         self._completed_count = 0
@@ -212,11 +213,14 @@ class RedisQueue(TaskQueue):
         await self._cascade_cancel(task_id)
         self._check_all_done(redis)
 
-    async def wait_for_all(self) -> dict[str, str | None]:
+    async def wait_for_all(self, timeout: float = 300.0) -> dict[str, str | None]:
         """Block until all subtasks reach a terminal state.
 
         Subscribes to a Redis pub/sub channel and waits for the ALL_DONE
         signal. If all tasks are already done, returns immediately.
+
+        Raises asyncio.TimeoutError if *timeout* seconds elapse before
+        all tasks complete.
         """
         redis = await get_redis()
         pubsub = redis.pubsub()
@@ -227,10 +231,15 @@ class RedisQueue(TaskQueue):
             await pubsub.unsubscribe(self._pubsub)
             return self._collect_results()
 
-        # Wait for the ALL_DONE message
-        async for message in pubsub.listen():
-            if message["type"] == "message" and message["data"] == "ALL_DONE":
-                break
+        # Wait for the ALL_DONE message with timeout
+        try:
+            async with asyncio.timeout(timeout):
+                async for message in pubsub.listen():
+                    if message["type"] == "message" and message["data"] == "ALL_DONE":
+                        break
+        except asyncio.TimeoutError:
+            await pubsub.unsubscribe(self._pubsub)
+            raise
 
         await pubsub.unsubscribe(self._pubsub)
         return self._collect_results()
@@ -303,8 +312,9 @@ class RedisQueue(TaskQueue):
     def _check_all_done(self, redis: Any) -> None:
         """Publish ALL_DONE if all tasks have reached a terminal state."""
         if self._completed_count >= self._total_count:
-            import asyncio
-            asyncio.create_task(redis.publish(self._pubsub, "ALL_DONE"))
+            task = asyncio.create_task(redis.publish(self._pubsub, "ALL_DONE"))
+            self._pending_tasks.add(task)
+            task.add_done_callback(self._pending_tasks.discard)
 
     def _collect_results(self) -> dict[str, str | None]:
         """Build {task_id: result} from in-memory task states."""

@@ -50,7 +50,8 @@ async def init_db() -> None:
             _stmt = _stmt.strip()
             if _stmt:
                 async with _sessionmaker() as _conn:
-                    await _conn.execute(text(_stmt + ";"))
+                    async with _conn.begin():
+                        await _conn.execute(text(_stmt + ";"))
                 
 
 

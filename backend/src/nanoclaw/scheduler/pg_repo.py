@@ -140,6 +140,15 @@ class PgScheduledTaskRepo(ScheduledTaskRepo):
         if not updates:
             return await self.get(task_id)
 
+        # Whitelist allowed columns — prevent SQL injection
+        _ALLOWED_COLUMNS = frozenset({
+            "description", "prompt", "schedule", "enabled",
+            "last_run", "agent_id", "session_id", "user_id",
+        })
+        for key in updates:
+            if key not in _ALLOWED_COLUMNS:
+                raise ValueError(f"Unknown column: {key!r}")
+
         set_clauses = ", ".join(
             f"{key} = :{key}" for key in updates
         )
