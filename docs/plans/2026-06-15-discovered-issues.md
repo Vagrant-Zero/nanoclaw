@@ -14,8 +14,8 @@
 | 2 | P1 | 前端 StreamingChat SSE 解析鲁棒性 | ✅ 已完成 |
 | 3 | P1 | RedisQueue 全面审查 | ✅ 已完成 |
 | 4 | P2 | 健康检查端点增强 | ✅ 已完成 |
-| 5 | P1 | ContextManager 完整压缩实现（重构） | ⬜ 待执行 |
-| 6 | P2 | PG 连接池 warm-up + 多 worker 安全 | ⬜ 待执行 |
+| 5 | P1 | ContextManager 完整压缩实现（重构） | ✅ 已完成 |
+| 6 | P2 | PG 连接池 warm-up + 多 worker 安全 | ✅ 已完成 |
 | 7 | P3 | 抽取 `_deserialize_jsonb()` 工具函数 | ✅ 已完成 |
 
 ---
