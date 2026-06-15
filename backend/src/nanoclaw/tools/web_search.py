@@ -133,7 +133,7 @@ class WebSearchTool(BaseTool):
         },
     )
 
-    _TIMEOUT = httpx.Timeout(connect=10, read=10, pool=10)
+    _TIMEOUT = httpx.Timeout(connect=10, read=10, write=10, pool=10)
 
     def run(self, query: str, max_results: int = 3) -> str:
         last_error: str | None = None
