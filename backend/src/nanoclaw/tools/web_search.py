@@ -53,17 +53,36 @@ class _Engine:
 
     def _extract_bing(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
         results: list[tuple[str, str, str]] = []
-        # Bing results are in <li class="b_algo"> blocks
+        # Bing results are in <li class="b_algo"> blocks.
+        # The result <a> is inside <h2>; the snippet is in <p> inside b_caption.
         blocks = re.split(r'<li[^>]*class="b_algo"[^>]*>', html)[1:]
         for block in blocks[:max_count]:
-            title_m = re.search(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
-            snippet_m = re.search(r'<p[^>]*>(.*?)</p>', block, re.DOTALL)
-            title = self._clean(title_m.group(2)) if title_m else ""
-            url = title_m.group(1) if title_m else ""
-            snippet = self._clean(snippet_m.group(1)) if snippet_m else ""
-            if title and url:
+            # Extract URL + title from <h2><a href="...">Title</a></h2>
+            h2_link_m = re.search(
+                r'<h2[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>.*?</h2>',
+                block, re.DOTALL,
+            )
+            # Extract snippet from <p> inside .b_caption (avoid unrelated <p> tags)
+            caption_p_m = re.search(
+                r'<div[^>]*class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>',
+                block, re.DOTALL,
+            )
+            title = self._clean(h2_link_m.group(2)) if h2_link_m else ""
+            url = h2_link_m.group(1) if h2_link_m else ""
+            snippet = self._clean(caption_p_m.group(1)) if caption_p_m else ""
+            if title and url and self._is_valid_url(url):
                 results.append((title, url, snippet))
         return results
+
+    @staticmethod
+    def _is_valid_url(url: str) -> bool:
+        """Filter out noisy / non-result links."""
+        # Skip navigation, share, feedback links
+        skip_domains = {"stackoverflow.com", "github.com", "facebook.com", "twitter.com"}
+        for skip in skip_domains:
+            if skip in url:
+                return False
+        return True
 
     # ── Baidu ───────────────────────────────────────────────────────
 
