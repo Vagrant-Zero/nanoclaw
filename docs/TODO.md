@@ -11,16 +11,17 @@
 4. Agent 链路缺少可观测性，需要接入专门的 tracing/ observability 平台，优先评估 LangSmith或 Langfuse，覆盖LLM调用、工具调用、子任务DAG、重试、checker、SSE事件等关键链路。
 
 ## 实现风险
-- redisQueue中有问题，重新review一下。 
-- 排查并整改大量 `except Exception:pass` 或吞异常不记录日志的代码路径；至少应补充结构化日志或调试日志，否则线上排障和问题归因成本过高。
+- [x] redisQueue 问题已修复（Task 3：lease 缩短、iterative cascade cancel、幂等 init/restore）
+
+- [x] 吞异常路径已补日志（Task 1：worker_pool、context/manager、memory/reflection、scheduler/engine、app.py）
 - 修复前端 `StreamingChat`的 SSE 解析逻辑；当前按 chunk直接拆行，没有按 SSE 的“空行分隔完整事件”协议做 buffer和组装，遇到跨 chunk的‘event：’/data：’或半截 JS 时不稳
-- 为前端流式请求补充`AbortController`或等价机制，组件卸载或请求取消时应主动中止底层 `fetch`，而不只是设置 `canceLled = true`。
-- 明确前端对`done`事件的处理语义，避免仅依赖连接关闭作为流结束信号。
-- 为前端流式对话补齐 `thread_id` 、传递，保证多轮对话能复用同一 `session`。
-- 评估并修复 `StreamingChat`、的 `useEffect`、依赖问题，避免 `baseUrL`、和各类回调形成陈旧闭包。
-- 抽取并统一 CLI 侧SSE 解析逻辑，避免 `client.ts` 与 `StreamingChat.tsx`, 各自维护一套不一致的协议实现。
-- 按照技术文档与方案，补齐 `ContextManager` 的 `context compact` / compression 实现；当前只有 prompt 拼装。
-- 将 `eval/events.py` 中已定义但未接入的 `ContextStatsEvent` 真正打通，记录压缩次数、压缩前后 token 数和总上下文规模
+- [x] AbortController 已实现（Task 2）
+- [x] done 事件处理已明确（Task 2）
+- [x] thread_id 传递已补齐（Task 2）
+- [x] useEffect 陈旧闭包已修复（Task 2：全部 callback 改为 ref 存储）
+- [x] SSE 解析已统一到共享 `sse-parser.ts`（Task 2）
+- [x] ContextManager 三级压缩已实现（Task 5：time-based MC、count-based MC、LLM auto-compact）
+- [x] ContextStatsEvent 已接入（Task 5：通过 EventLogger 写入，fallback logger.info()）
 ## 优化项
 - 后端 SSE `message_chunk` 改为逐 token 流式输出，而非一次性发送；当前 `run_graph()` 在 `supervisor.ainvoke()` 完成后才发送完整 content，需将 agent 的 `ainvoke` 改为 `astream` 并在 LLM streaming 回调中逐 token yield
 ## Phase 5/6 回检问题
@@ -37,23 +38,23 @@
 ### 待修复（按优先级排序）
 
 #### P0 — 启动与连接可靠性
-- [ ] `storage/db.py` `init_db()` 中 `SELECT 1` 能验证连接，但 `create_async_engine()` 是懒连接——`pool_size` 未必在首次查询时全部建立；评估是否需要 warm-up pool
-- [ ] `storage/redis_client.py` `get_redis()` 的 `Redis.from_url(decode_responses=True)` 创建的 client 是懒连接，`ping()` 能验证一次但非长活保活；评估心跳/重连策略
-- [ ] 多 worker（uvicorn `--workers > 1`）场景下 `storage/db.py` / `redis_client.py` 的模块级全局变量存在竞态；评估 per-worker 初始化或进程级单例
+- [x] PG 连接池已加入 warm-up（Task 6：init_db 末尾创建 pool_size 个连接）
+- [x] Redis 已加入心跳 + 自动重连（30s ping，3 次失败后重建连接）
+- [x] 多 worker 安全已文档说明（Task 6：fork-after-init，每个 worker 独立副本）
 
 #### P1 — 数据一致性与错误处理
-- [ ] `pg_session_repo.py` `append_message()` 的读-改-写模式非原子：读 `history` → 追加 → 写回，并发写入时互相覆盖；评估 `jsonb_insert()` 或行级锁
-- [ ] `storage/redis_queue.py` `ZSET` 租约机制在 worker 崩溃后等待 5 分钟才能被 `restore()` 回收；评估缩短默认租期或添加心跳续约
-- [ ] 排查所有 `except Exception: pass` 路径（已列在实现风险中），至少补 warn 级别日志；重点路径：`worker_pool.py` 的 `_emit()`、`app.py` 的 `event_generator` try/except
-- [ ] `scheduler/engine.py` 后台轮询 task 无超时保护，`get_due_tasks()` 或 `run_dreaming()` 卡住时整个 scheduler loop 阻塞
+- [x] append_message 已改为原子 UPDATE（JSONB || 运算符）
+- [x] ZSET 租约已缩短至 120s + 新增 renew_lease() 心跳方法（Task 3）
+- [x] 所有 except Exception: pass 路径已补日志（Task 1 + Task 3）
+- [x] scheduler dispatch 已加入 120s asyncio.timeout 保护
 
 #### P2 — 可观测性与运维
 - [ ] `backend/.nanoclaw/dreams/.last_dreaming` 已加入 gitignore，但 eval 日志 (`eval_dir`) 和 trajectory 文件仍在仓库目录下，缺少统一清理策略（TTL、磁盘配额）
 - [ ] Docker Compose 的 PostgreSQL 容器升级 schema 需重建 volume；评估在 `init_db()` 中引入版本号迁移（[Alembic](https://alembic.sqlalchemy.org/) 或轻量自建）
 - [ ] `scheduler/pg_repo.py` `_row_to_task()` 使用 `row.*` 属性访问，依赖 SQLAlchemy 的 `Row` 映射；缺字段或类型不匹配时异常被吞，无反馈
-- [ ] 无统一健康检查端点验证 DB / Redis / Chroma 全部可达（当前 `/health` 只返回 `ok`）
+- [x] 健康检查已扩展为 per-service status（Task 4：postgres/redis/chroma 各返回 ok/unreachable/disabled）
 
 #### P3 — 代码整洁与技术债
-- [ ] `pg_session_repo.py` 中 `isinstance(row.history, str)` / `isinstance(row.history, list)` 检查遍布三处方法；抽取为 `_deserialize_jsonb()` 工具函数
+- [x] 已抽取为 `_deserialize_jsonb()` / `_deserialize_jsonb_list()`（Task 7）
 - [ ] `redis_queue.py` `_check_all_done` 在 `complete()` / `fail()` / `compensate()` 三处调用，其中 `complete()` 和 `fail()` 的调用方是 `worker_pool.py`——考虑统一到单个事件出口
-- [ ] `storage/db.py` migration 的 SQL split 逻辑过于简单（分号分割），无法处理函数定义或 PL/pgSQL 中含分号的语句；评估改用逐语句执行或专用 migration 工具
+- [x] SQL split 已改为状态机解析，跳过 $$ 内的分号
