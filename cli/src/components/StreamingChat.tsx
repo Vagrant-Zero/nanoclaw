@@ -77,14 +77,15 @@ export function StreamingChat({
   const onExperienceRef = useRef(onExperience);
   onExperienceRef.current = onExperience;
 
-  const DEBUG_LOG = "/tmp/nanoclaw-sse.log";
-  try { mkdirSync("/tmp", { recursive: true }); writeFileSync(DEBUG_LOG, ""); } catch {}
-
   useEffect(() => {
     if (!message) return;
     let completed = false;
     const abortController = new AbortController();
     fullTextRef.current = "";
+
+    // Initialise SSE debug log
+    const DEBUG_LOG = "/tmp/nanoclaw-sse.log";
+    try { writeFileSync(DEBUG_LOG, ""); } catch {}
 
     const run = async () => {
       try {
