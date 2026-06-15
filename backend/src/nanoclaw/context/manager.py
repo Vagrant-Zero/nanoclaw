@@ -14,11 +14,29 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+
+from nanoclaw.context.auto_compact import AutoCompact
+from nanoclaw.context.micro_compact import MicroCompact
+
+from nanoclaw.context.compression_config import CompressionConfig
+from nanoclaw.eval.events import ContextStatsEvent
+from nanoclaw.eval.logger import EventLogger
 
 if TYPE_CHECKING:
     from nanoclaw.memory.store import MemoryStore
     from nanoclaw.models.chat import ChatMessage
+def _estimate_messages_tokens(messages: list) -> int:
+    """Rough token count for a list of langchain messages."""
+    total = 0
+    for m in messages:
+        content = getattr(m, "content", "")
+        if isinstance(content, str):
+            total += len(content) // 3 + 1
+    return total
+
+
 DEFAULT_SYSTEM_PROMPT = (
     "You are Nanoclaw, a personal AI assistant. "
     "Help the user accomplish their tasks by reasoning step by step and "
@@ -48,13 +66,24 @@ class ContextManager:
         response = await llm.ainvoke(prompt)
     """
 
-    def __init__(self, memory_store: MemoryStore | None = None) -> None:
+    def __init__(
+        self,
+        memory_store: MemoryStore | None = None,
+        compression_config: CompressionConfig | None = None,
+        auto_compact: AutoCompact | None = None,
+        event_logger: EventLogger | None = None,
+    ) -> None:
         self._memory_store = memory_store
+        self._compression_config = compression_config
+        self._auto_compact = auto_compact
+        self._event_logger = event_logger
+        self._compression_count = 0
 
     async def build_prompt(
         self,
         session: SessionContext,
         active_subtask: object | None = None,
+        llm: BaseChatModel | None = None,
     ) -> list:
         """Build a message list for the LLM.
 
@@ -91,6 +120,48 @@ class ContextManager:
         # 5. Active task state
         if active_subtask is not None:
             self._inject_task_state(messages, active_subtask)
+
+        # ── Compression pipeline ────────────────────────────────────
+        if self._compression_config is not None:
+            # Step A: Time-based MC — clear expired tool_results
+            MicroCompact.time_based_compact(
+                messages,
+                self._compression_config.time_mc_max_age_minutes,
+            )
+            # Step B: Count-based MC — trim excess tool_results
+            MicroCompact.count_based_compact(
+                messages,
+                self._compression_config.count_mc_max_results,
+            )
+            # Step C: Token-based auto-compact (LLM summary)
+            if self._auto_compact is not None and llm is not None:
+                tokens_before = _estimate_messages_tokens(messages)
+                messages = await self._auto_compact.compact(
+                    messages, llm, session.id,
+                )
+                tokens_after = _estimate_messages_tokens(messages)
+                self._compression_count = self._auto_compact.compression_count
+
+                # Log ContextStatsEvent (Subtask 5.5)
+                stats = ContextStatsEvent(
+                    session_id=session.id,
+                    total_tokens=tokens_before,
+                    compression_count=self._compression_count,
+                    tokens_before=tokens_before,
+                    tokens_after=tokens_after,
+                )
+                if self._event_logger is not None:
+                    await self._event_logger.log_event(
+                        session.id, "context_stats", stats,
+                    )
+                else:
+                    import logging as _logging
+                    _logging.getLogger(__name__).info(
+                        "ContextStats — session=%s total=%d compressions=%d before=%d after=%d",
+                        session.id, tokens_before,
+                        self._compression_count,
+                        tokens_before, tokens_after,
+                    )
 
         return messages
 
