@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Text } from "ink";
 import { SseParser } from "../sse-parser.js";
-import type { DoneData } from "../types.js";
 import type {
   SubtaskInfo,
   CheckResultData,
@@ -55,6 +54,7 @@ export function StreamingChat({
 
   // Refs for mutable state shared with the async loop
   const fullTextRef = useRef("");
+  const sessionIdRef = useRef("");
 
   // Refs for callbacks — prevents stale closures in useEffect
   const onDoneRef = useRef(onDone);
@@ -134,10 +134,14 @@ export function StreamingChat({
         return;
       }
 
-      if (!completed) {
-        completed = true;
-        onDoneRef.current(fullTextRef.current, "");
-      }
+      // After the stream ends (either via done event or connection close),
+      // call onDone in the next macrotask so React can flush
+      // setContent updates before the parent's setStreamingMsg(null)
+      // triggers component unmount (React 18 batch avoidance).
+      const finalText = fullTextRef.current;
+      setTimeout(() => {
+        onDoneRef.current(finalText, completed ? sessionIdRef.current : "");
+      }, 0);
     };
 
     const dispatch = (event: string, data: unknown) => {
@@ -178,8 +182,7 @@ export function StreamingChat({
           break;
         case "done":
           completed = true;
-          const doneData = d as unknown as DoneData;
-          onDoneRef.current(fullTextRef.current, doneData.session_id);
+          sessionIdRef.current = (d as Record<string, unknown>).session_id as string || "";
           break;
       }
     };
