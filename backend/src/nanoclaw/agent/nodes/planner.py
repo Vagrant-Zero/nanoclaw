@@ -212,7 +212,9 @@ def create_planner_node(
         user_content = content
         for s in subtasks:
             if s.rubric:
-                v_errors = rubric_validator.validate(s, s.rubric, user_content)
+                v_errors, v_warnings = rubric_validator.validate(s, s.rubric, user_content)
+                for w in v_warnings:
+                    logger.warning("Rubric advisory for %s: %s", s.id, w)
                 if v_errors:
                     return {
                         "plan": None,

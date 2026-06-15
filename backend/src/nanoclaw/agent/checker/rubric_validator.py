@@ -32,26 +32,27 @@ class RubricValidator:
         subtask: Subtask,
         rubric: Rubric,
         user_request: str,  # noqa: ARG002 — kept for API compatibility
-    ) -> list[str]:
-        """Validate a rubric. Returns a list of issues (empty = valid)."""
-        issues: list[str] = []
+    ) -> tuple[list[str], list[str]]:
+        """Validate a rubric. Returns (errors, warnings)."""
+        errors: list[str] = []
+        warnings: list[str] = []
         sid = subtask.id
 
         # 1. At least one criterion
         if not rubric.criteria:
-            issues.append(f"[{sid}] Rubric has no criteria")
-            return issues  # No point checking further
+            errors.append(f"[{sid}] Rubric has no criteria")
+            return errors, warnings
 
         # 2. Each criterion has non-empty text
         for i, c in enumerate(rubric.criteria):
             if not c.text or not c.text.strip():
-                issues.append(f"[{sid}] Criterion {i} has empty text")
+                errors.append(f"[{sid}] Criterion {i} has empty text")
 
         # 3. check_type must be valid
         valid_types = {"rule", "llm"}
         for i, c in enumerate(rubric.criteria):
             if c.check_type not in valid_types:
-                issues.append(
+                errors.append(
                     f"[{sid}] Criterion {i} has invalid check_type: "
                     f"{c.check_type!r} (must be 'rule' or 'llm')"
                 )
@@ -60,7 +61,7 @@ class RubricValidator:
         has_rule = any(c.check_type == "rule" for c in rubric.criteria)
         tool_names = set(subtask.tools_needed)
         if tool_names and tool_names.issubset(_OPERATIONAL_TOOLS) and not has_rule:
-            issues.append(
+            warnings.append(
                 f"[{sid}] Advisory: operational subtask has no rule-based "
                 f"criteria; consider adding file/existence checks"
             )
@@ -68,8 +69,8 @@ class RubricValidator:
         # 5. Check for vague wording in criteria
         for i, c in enumerate(rubric.criteria):
             if _VAGUE_PATTERNS.search(c.text):
-                issues.append(
+                warnings.append(
                     f"[{sid}] Criterion {i} uses vague wording: {c.text!r}"
                 )
 
-        return issues
+        return errors, warnings
