@@ -140,11 +140,14 @@ export function StreamingChat({
       // triggers component unmount (React 18 batch avoidance).
       const finalText = fullTextRef.current;
       setTimeout(() => {
+        process.stderr.write(`[SSE] onDone finalText="${finalText}" sessionId="${completed ? sessionIdRef.current : ""}"\n`);
         onDoneRef.current(finalText, completed ? sessionIdRef.current : "");
       }, 0);
     };
 
     const dispatch = (event: string, data: unknown) => {
+      // Debug: log all SSE events to stderr
+      process.stderr.write(`[SSE] event=${event} data=${JSON.stringify(data)}\n`);
       if (typeof data !== "object" || data === null) return;
       const d = data as Record<string, unknown>;
 
@@ -178,6 +181,7 @@ export function StreamingChat({
           break;
         case "message_chunk":
           fullTextRef.current += d.content as string;
+          process.stderr.write(`[SSE] message_chunk content="${d.content}" total="${fullTextRef.current}"\n`);
           setContent(fullTextRef.current);
           break;
         case "done":
