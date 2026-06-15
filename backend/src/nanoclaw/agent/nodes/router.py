@@ -12,6 +12,8 @@ import json
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
+logger = logging.getLogger(__name__)
+
 # ── Heuristic thresholds ──────────────────────────────────────────────
 
 _FUZZY_THRESHOLD = 15       # Messages shorter than this are always "react"

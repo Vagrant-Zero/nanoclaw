@@ -9,12 +9,15 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import time
 from typing import TYPE_CHECKING, Callable
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
 from langgraph.graph.state import CompiledStateGraph
+
+logger = logging.getLogger(__name__)
 
 from nanoclaw.agent.state import AgentState
 from nanoclaw.tools.registry import ToolRegistry

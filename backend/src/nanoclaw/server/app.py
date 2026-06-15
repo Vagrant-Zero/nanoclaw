@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.responses import Response
 
 from nanoclaw.config import settings
+from nanoclaw.log_config import setup_logging
 from sqlalchemy import text
 from nanoclaw.context import ContextManager
 from nanoclaw.dreaming import DreamingEngine, register_dreaming_tools
@@ -70,6 +71,8 @@ class ChatResponse(BaseModel):
 async def lifespan(app: FastAPI):
     """Startup: initialize storage backends, create services.
     Shutdown: flush logs and close connections."""
+    # Configure file-based logging before anything else
+    setup_logging()
     # ── Phase 5: Initialize infrastructure if configured ──────
     # Fail fast: if DB/Redis is configured but unreachable, crash at startup.
     if settings.db_url:

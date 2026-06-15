@@ -12,6 +12,7 @@ awaited, and collected into a final response.
 from __future__ import annotations
 
 import asyncio
+import logging
 import time
 
 from langchain_core.language_models.chat_models import BaseChatModel
@@ -27,6 +28,8 @@ from nanoclaw.models.task import TaskStatus
 from nanoclaw.storage.session_repo import SessionRepository
 from nanoclaw.tools.registry import ToolRegistry
 
+logger = logging.getLogger(__name__)
+
 
 # ── Complex-path node implementations ──
 
@@ -34,7 +37,9 @@ from nanoclaw.tools.registry import ToolRegistry
 async def _dispatch_node(state: dict) -> dict:
     """Initialize the TaskQueue with the plan and start workers."""
     plan = state.get("plan")
+    sid = state.get("session_id", "?")
     if plan is None:
+        logger.warning("[%s] dispatch_node: plan is None, errors=%s", sid, state.get("errors"))
         errs = (state.get("errors") or []) + ["No plan to dispatch"]
         return {"errors": errs}
 
@@ -85,6 +90,7 @@ async def _dispatch_node(state: dict) -> dict:
 
 async def _await_node(state: dict) -> dict:
     """Wait for all subtasks to complete, then stop workers."""
+    logger.info("[%s] await_node: waiting for all subtasks", state.get("session_id", "?"))
     task_queue = state.get("task_queue")
     if task_queue is None:
         errs = (state.get("errors") or []) + ["Task queue not initialized"]
@@ -104,8 +110,10 @@ async def _collect_node(state: dict) -> dict:
     results = state.get("worker_results") or {}
     plan = state.get("plan")
     state_errors = state.get("errors") or []
+    sid = state.get("session_id", "?")
 
     if plan is None:
+        logger.warning("[%s] collect_node: plan is None, errors=%s", sid, state_errors)
         return {
             "messages": [
                 AIMessage(

@@ -8,6 +8,8 @@ planner's intent.
 
 from __future__ import annotations
 
+import logging
+
 import json
 from typing import TYPE_CHECKING, Callable
 
@@ -15,6 +17,8 @@ from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from nanoclaw.agent.checker.rubric_validator import RubricValidator
+
+logger = logging.getLogger(__name__)
 from nanoclaw.agent.nodes.validate import validate_plan
 from nanoclaw.models.task import (
     Criterion,
@@ -129,12 +133,14 @@ def create_planner_node(
                 response_format={"type": "json_object"},
             )
         except Exception as exc:
+            logger.error("Planner LLM call failed: %s", exc, exc_info=True)
             return {"plan": None, "errors": [f"Planner LLM call failed: {exc}"]}
 
         # ── 2. Parse JSON response ──
         try:
             data = json.loads(response.content)
         except json.JSONDecodeError as exc:
+            logger.error("Planner JSON parse error: %s. Raw content: %s", exc, response.content[:500], exc_info=True)
             return {"plan": None, "errors": [f"Planner JSON parse error: {exc}"]}
 
         raw_items: list[dict] = []
@@ -143,6 +149,7 @@ def create_planner_node(
         elif isinstance(data, list):
             raw_items = data
         else:
+            logger.warning("Planner response missing 'subtasks' array. Got: type=%s keys=%s", type(data).__name__, list(data.keys()) if isinstance(data, dict) else "N/A")
             return {
                 "plan": None,
                 "errors": [
@@ -151,6 +158,7 @@ def create_planner_node(
             }
 
         # ── 3. Build Subtask objects with Rubrics ──
+        logger.info("Planner succeeded: %d subtasks from LLM", len(raw_items))
         subtasks: list[Subtask] = []
         parse_errors: list[str] = []
 
