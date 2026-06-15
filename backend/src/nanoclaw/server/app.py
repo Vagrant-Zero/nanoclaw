@@ -16,6 +16,7 @@ from sse_starlette.sse import EventSourceResponse
 from starlette.responses import Response
 
 from nanoclaw.config import settings
+from sqlalchemy import text
 from nanoclaw.context import ContextManager
 from nanoclaw.dreaming import DreamingEngine, register_dreaming_tools
 from nanoclaw.eval import EventLogger
@@ -45,6 +46,7 @@ class ChatRequest(BaseModel):
 class HealthResponse(BaseModel):
     status: str
     version: str
+    checks: dict[str, str] = {}
 
 class ToolCallInfo(BaseModel):
     name: str
@@ -141,7 +143,51 @@ def create_app() -> FastAPI:
 
     @app.get("/health", response_model=HealthResponse)
     async def health() -> HealthResponse:
-        return HealthResponse(status="ok", version="0.1.0")
+        """Health check endpoint with per-service status.
+
+        Returns connectivity status for PostgreSQL, Redis, and Chroma
+        (not yet integrated). Each service is reported as:
+          - ``ok`` — reachable and responsive
+          - ``unreachable`` — configured but not responding
+          - ``disabled`` — not configured / not integrated
+        """
+        checks: dict[str, str] = {}
+
+        # PostgreSQL
+        if settings.db_url:
+            try:
+                from nanoclaw.storage.db import get_session
+                async with get_session() as conn:
+                    await conn.execute(text("SELECT 1"))
+                checks["postgres"] = "ok"
+            except RuntimeError:
+                checks["postgres"] = "disabled"
+            except Exception:
+                checks["postgres"] = "unreachable"
+        else:
+            checks["postgres"] = "disabled"
+
+        # Redis
+        if settings.redis_url:
+            try:
+                redis = await get_redis()
+                await redis.ping()
+                checks["redis"] = "ok"
+            except RuntimeError:
+                checks["redis"] = "disabled"
+            except Exception:
+                checks["redis"] = "unreachable"
+        else:
+            checks["redis"] = "disabled"
+
+        # Chroma — not yet integrated, always disabled
+        checks["chroma"] = "disabled"
+
+        # Overall status: "ok" if all enabled services are healthy
+        all_ok = all(v in ("ok", "disabled") for v in checks.values())
+        overall = "ok" if all_ok else "degraded"
+
+        return HealthResponse(status=overall, version="0.1.0", checks=checks)
 
     # ── Chat endpoints ──
 
