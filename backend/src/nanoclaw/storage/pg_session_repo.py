@@ -76,26 +76,25 @@ class PgSessionRepo(SessionRepository):
         )
 
     async def append_message(self, session_id: str, msg: ChatMessage) -> None:
+        """Atomically append a message to the session history.
+
+        Uses a single UPDATE with jsonb concatenation (the || operator)
+        instead of the previous read-modify-write pattern. This eliminates
+        the race condition where two concurrent appends could overwrite
+        each other's changes.
+        """
         async with get_session() as s:
-            # Read current history
-            row = (
-                await s.execute(
-                    text("SELECT history FROM sessions WHERE id = :id"),
-                    {"id": session_id},
-                )
-            ).fetchone()
-            if row is None:
-                msg_text = f"Session {session_id!r} not found"
-                raise ValueError(msg_text)
-            history = deserialize_jsonb_list(row.history)
-            history.append(msg.to_dict())
-            await s.execute(
+            result = await s.execute(
                 text("""
-                    UPDATE sessions SET history = CAST(:history AS JSONB)
+                    UPDATE sessions
+                    SET history = history || CAST(:new_msg AS JSONB)
                     WHERE id = :id
                 """),
-                {"id": session_id, "history": json.dumps(history)},
+                {"id": session_id, "new_msg": json.dumps([msg.to_dict()])},
             )
+            if result.rowcount == 0:
+                msg_text = f"Session {session_id!r} not found"
+                raise ValueError(msg_text)
             await s.commit()
 
     async def get_history(self, session_id: str) -> list[ChatMessage]:
