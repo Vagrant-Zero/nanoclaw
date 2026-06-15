@@ -50,6 +50,7 @@ async def get_redis() -> Redis:
         url = settings.redis_url or "redis://localhost:6379/0"
         _redis = Redis.from_url(url, decode_responses=True,
         socket_timeout=None, socket_connect_timeout=5)
+        logger.info("Redis client created: %s socket_timeout=None", url)
         # Verify connection — crash now if Redis is unreachable
         await _redis.ping()
         # Start background heartbeat

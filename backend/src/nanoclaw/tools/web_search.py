@@ -210,18 +210,25 @@ class WebSearchTool(BaseTool):
         """Try a single engine. Returns formatted results string, or None if no results."""
         req = engine.build_request(query)
         with httpx.Client(timeout=self._TIMEOUT) as client:
+            _headers = {
+                "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36",
+                "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+                "Accept-Language": "zh-CN,zh;q=0.9,en;q=0.8",
+            }
             if engine.method == "POST":
                 resp = client.post(
                     req["url"],
                     data=req["data"],
-                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+                    headers=_headers,
                     follow_redirects=True,
                 )
             else:
+                # Add Referer to avoid Baidu bot detection
+                _headers["Referer"] = "https://www.baidu.com/"
                 resp = client.get(
                     req["url"],
                     params=req["params"] if "params" in req else {},
-                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
+                    headers=_headers,
                     follow_redirects=True,
                 )
             resp.raise_for_status()
