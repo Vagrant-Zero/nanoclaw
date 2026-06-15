@@ -174,7 +174,10 @@ export function StreamingChat({
           onExperienceRef.current?.(d as unknown as ExperienceEntry);
           break;
         case "error":
-          setError((d.message as string) || "Backend error");
+          // Append error to content instead of hiding content — the error
+          // text is displayed inline so the user sees what happened
+          fullTextRef.current += (d.message as string) || "Backend error";
+          setContent(fullTextRef.current);
           break;
         case "message_chunk":
           fullTextRef.current += d.content as string;

@@ -122,8 +122,8 @@ class _Engine:
 # ── Engine list ─────────────────────────────────────────────────────
 
 _ENGINES = [
-    _Engine("bing", "https://www.bing.com/search", "GET", "q"),
     _Engine("baidu", "https://www.baidu.com/s", "GET", "wd"),
+    _Engine("bing", "https://www.bing.com/search", "GET", "q"),
     _Engine("duckduckgo", "https://html.duckduckgo.com/html/", "POST", "q"),
 ]
 
