@@ -154,6 +154,10 @@ export function StreamingChat({
       switch (event) {
         case "agent_think":
           onThinkRef.current?.(d.content as string);
+          // Also accumulate into fullText so the content survives
+          // even if the stream ends with an error (e.g. Redis timeout)
+          fullTextRef.current += d.content as string;
+          setContent(fullTextRef.current);
           break;
         case "agent_action":
           onActionRef.current?.(d.tool as string, d.args as Record<string, unknown>);
