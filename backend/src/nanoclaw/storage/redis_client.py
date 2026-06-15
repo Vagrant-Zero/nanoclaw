@@ -3,6 +3,11 @@
 Provides a module-level Redis client singleton that is created once
 at startup and reused across all RedisQueue instances.
 
+Multi-worker safety (uvicorn --workers > 1):
+- Each child process forks after the lifespan start hook, so every
+  worker gets its own copy of the _redis global.
+- No shared state across workers; no synchronization needed.
+
 Usage:
     from nanoclaw.storage.redis_client import get_redis, close_redis
 

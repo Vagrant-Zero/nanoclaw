@@ -3,6 +3,11 @@
 Module-level globals are standard practice for FastAPI apps.
 Engine is created once at startup and disposed at shutdown.
 
+Multi-worker safety (uvicorn --workers > 1):
+- Each child process forks after the lifespan start hook, so every
+  worker gets its own copy of _engine and _sessionmaker globals.
+- No shared state across workers; no synchronization needed.
+
 Usage:
     from nanoclaw.storage.db import init_db, close_db, get_session
 
@@ -52,7 +57,12 @@ async def init_db() -> None:
                 async with _sessionmaker() as _conn:
                     async with _conn.begin():
                         await _conn.execute(text(_stmt + ";"))
-                
+
+    # Warm-up the async pool: establish connections now so the first
+    # request does not pay lazy-connect latency (~50ms+ per connection).
+    for _ in range(5):  # pool_size
+        async with _sessionmaker() as _warmup:
+            await _warmup.execute(text("SELECT 1"))
 
 
 async def close_db() -> None:
