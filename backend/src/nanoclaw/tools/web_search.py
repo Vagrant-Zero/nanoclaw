@@ -121,10 +121,11 @@ class _Engine:
 
 # ── Engine list ─────────────────────────────────────────────────────
 
+# Only Baidu — works reliably for Chinese queries under GFW.
+# Bing and DuckDuckGo are removed because their HTML parsing is
+# brittle and often returns irrelevant/noisy results.
 _ENGINES = [
     _Engine("baidu", "https://www.baidu.com/s", "GET", "wd"),
-    _Engine("bing", "https://www.bing.com/search", "GET", "q"),
-    _Engine("duckduckgo", "https://html.duckduckgo.com/html/", "POST", "q"),
 ]
 
 

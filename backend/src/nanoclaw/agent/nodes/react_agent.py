@@ -29,7 +29,7 @@ if TYPE_CHECKING:
     from nanoclaw.eval.logger import EventLogger
 
 _LLM_TIMEOUT_SECONDS = 30
-_MAX_TOOL_ROUNDS = 10  # Max LLM tool call cycles per agent run
+_MAX_TOOL_ROUNDS = 5  # Max LLM tool call cycles per agent run
 
 
 def create_react_agent(
