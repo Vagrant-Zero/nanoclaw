@@ -88,18 +88,45 @@ class _Engine:
 
     def _extract_baidu(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
         results: list[tuple[str, str, str]] = []
-        # Baidu results are in <div class="result c-container"> blocks
-        blocks = re.split(r'<div[^>]*class="result[^"]*c-container[^"]*"[^>]*>', html)[1:]
-        for block in blocks[:max_count]:
-            title_m = re.search(r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>', block, re.DOTALL)
-            snippet_m = re.search(r'<div[^>]*class="c-abstract"[^>]*>(.*?)</div>', block, re.DOTALL)
-            if not snippet_m:
-                snippet_m = re.search(r'<span[^>]*class="content-right_[^"]*"[^>]*>(.*?)</span>', block, re.DOTALL)
-            title = self._clean(title_m.group(2)) if title_m else ""
-            url = title_m.group(1) if title_m else ""
-            snippet = self._clean(snippet_m.group(1)) if snippet_m else ""
-            if title and url:
-                results.append((title, url, snippet))
+        # Baidu results — match broad class patterns for "result" blocks
+        # (Baidu frequently changes class names like c-container, new-pmd, etc.)
+        blocks = re.split(
+            r'<div[^>]*class="[^"]*result[^"]*"[^>]*>', html,
+        )[1:]
+        for block in blocks[:max_count * 3]:  # oversample, filter later
+            # Title + URL from <a> links with http/https
+            link_m = re.search(
+                r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+                block, re.DOTALL,
+            )
+            if not link_m:
+                continue
+            raw_url = link_m.group(1)
+            # Skip Baidu-internal links and navigation
+            if "baidu.com" in raw_url and "/s?" not in raw_url:
+                continue
+            title = self._clean(link_m.group(2))
+            if not title or len(title) < 3:
+                continue
+
+            # Snippet: try multiple patterns Baidu uses
+            url = raw_url
+            snippet = ""
+            for pat in (
+                r'<div[^>]*class="[^"]*abstract[^"]*"[^>]*>(.*?)</div>',
+                r'<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>',
+                r'<span[^>]*class="[^"]*content-right[^"]*"[^>]*>(.*?)</span>',
+                r'<p[^>]*>(.*?)</p>',
+            ):
+                sm = re.search(pat, block, re.DOTALL)
+                if sm:
+                    snippet = self._clean(sm.group(1))
+                    if snippet:
+                        break
+
+            results.append((title, url, snippet))
+            if len(results) >= max_count:
+                break
         return results
 
     # ── DuckDuckGo ──────────────────────────────────────────────────
@@ -187,20 +214,28 @@ class WebSearchTool(BaseTool):
                 resp = client.post(
                     req["url"],
                     data=req["data"],
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
                     follow_redirects=True,
                 )
             else:
                 resp = client.get(
                     req["url"],
                     params=req["params"] if "params" in req else {},
-                    headers={"User-Agent": "Mozilla/5.0"},
+                    headers={"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0.0.0 Safari/537.36"},
                     follow_redirects=True,
                 )
             resp.raise_for_status()
 
         snippets = engine.extract(resp.text, max_results)
         if not snippets:
+            import logging
+            _log = logging.getLogger(__name__)
+            _log.warning(
+                "web_search [%s]: HTTP %d, %d bytes — but no results extracted. "
+                "HTML preview: %.100s...",
+                engine.name, resp.status_code, len(resp.text),
+                resp.text[:100],
+            )
             return None  # Let next engine try
 
         return "\n\n".join(
