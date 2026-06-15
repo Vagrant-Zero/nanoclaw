@@ -21,6 +21,8 @@
 - 抽取并统一 CLI 侧SSE 解析逻辑，避免 `client.ts` 与 `StreamingChat.tsx`, 各自维护一套不一致的协议实现。
 - 按照技术文档与方案，补齐 `ContextManager` 的 `context compact` / compression 实现；当前只有 prompt 拼装。
 - 将 `eval/events.py` 中已定义但未接入的 `ContextStatsEvent` 真正打通，记录压缩次数、压缩前后 token 数和总上下文规模
+## 优化项
+- 后端 SSE `message_chunk` 改为逐 token 流式输出，而非一次性发送；当前 `run_graph()` 在 `supervisor.ainvoke()` 完成后才发送完整 content，需将 agent 的 `ainvoke` 改为 `astream` 并在 LLM streaming 回调中逐 token yield
 ## Phase 5/6 回检问题
 
 ### 已修复（记录在案，防止回退）
