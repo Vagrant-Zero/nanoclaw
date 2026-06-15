@@ -25,6 +25,8 @@ from nanoclaw.storage.task_queue import TaskQueue
 
 
 class RedisQueue(TaskQueue):
+    _LEASE_EXPIRE_SECONDS = 120  # Worker crash detection timeout
+
     """Redis-backed DAG-aware task queue with lease-based crash recovery.
 
     Key namespace: ``nanoclaw:queue:{session_id}:*``
@@ -90,6 +92,10 @@ class RedisQueue(TaskQueue):
                 "retry_count": str(s.retry_count),
             })
 
+        # Clear any stale queue state (idempotency)
+        await redis.delete(self._q)
+        await redis.delete(self._leases)
+
         # Enqueue leaf tasks (no dependencies)
         for s in plan.subtasks:
             if not s.depends_on:
@@ -107,14 +113,24 @@ class RedisQueue(TaskQueue):
         if subtask is None:
             return None
 
-        # Claim lease: ZADD with 5-minute expiration
-        expire_ts = time.time() + 300
+        # Claim lease: ZADD with expiration
+        expire_ts = time.time() + self._LEASE_EXPIRE_SECONDS
         await redis.zadd(self._leases, {task_id: expire_ts})
 
         # Update in-memory and Redis state
         subtask.status = TaskStatus.RUNNING
         await redis.hset(self._task_key(task_id), "status", TaskStatus.RUNNING.value)
         return subtask
+
+    async def renew_lease(self, task_id: str) -> None:
+        """Extend the worker lease for a running subtask (heartbeat).
+
+        Call periodically during long-running tasks to prevent the
+        lease from expiring and another worker picking up the task.
+        """
+        redis = await get_redis()
+        expire_ts = time.time() + self._LEASE_EXPIRE_SECONDS
+        await redis.zadd(self._leases, {task_id: expire_ts})
 
     async def complete(self, task_id: str, result: str) -> None:
         redis = await get_redis()
@@ -228,7 +244,8 @@ class RedisQueue(TaskQueue):
         pubsub = redis.pubsub()
         await pubsub.subscribe(self._pubsub)
 
-        # Short-circuit: already done?
+        # Short-circuit: already done? (checked before AND after subscribe
+        # to close the race window with _check_all_done)
         if self._completed_count >= self._total_count:
             await pubsub.unsubscribe(self._pubsub)
             return self._collect_results()
@@ -277,6 +294,10 @@ class RedisQueue(TaskQueue):
         self._completed_count = snapshot["completed_count"]
         self._total_count = snapshot["total_count"]
 
+        # Clear stale queue data (idempotency)
+        await redis.delete(self._q)
+        await redis.delete(self._leases)
+
         # Rehydrate task objects from snapshot
         self._tasks = {}
         for task_id, data in snapshot["tasks"].items():
@@ -301,15 +322,28 @@ class RedisQueue(TaskQueue):
     # ── Internal helpers ───────────────────────────────────────────
 
     async def _cascade_cancel(self, task_id: str) -> None:
-        """Recursively mark all transitive downstream tasks as CANCELLED."""
+        """Iteratively (BFS) mark all transitive downstream tasks as CANCELLED.
+
+        Uses a stack instead of recursion to avoid stack overflow on
+        deep DAG chains (Python default recursion limit: ~1000).
+        """
         redis = await get_redis()
-        for downstream in self._rdag.get(task_id, []):
+        stack = list(self._rdag.get(task_id, []))
+        visited: set[str] = set()
+        while stack:
+            downstream = stack.pop()
+            if downstream in visited:
+                continue
+            visited.add(downstream)
             dt = self._tasks.get(downstream)
             if dt is not None and dt.status == TaskStatus.PENDING:
                 dt.status = TaskStatus.CANCELLED
                 self._completed_count += 1
                 await redis.hset(self._task_key(downstream), "status", TaskStatus.CANCELLED.value)
-                await self._cascade_cancel(downstream)
+                # Push transitive downstream tasks
+                for child in self._rdag.get(downstream, []):
+                    if child not in visited:
+                        stack.append(child)
 
     def _check_all_done(self, redis: Redis) -> None:
         """Publish ALL_DONE if all tasks have reached a terminal state."""
