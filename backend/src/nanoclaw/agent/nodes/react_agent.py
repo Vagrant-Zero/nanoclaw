@@ -29,6 +29,7 @@ if TYPE_CHECKING:
     from nanoclaw.eval.logger import EventLogger
 
 _LLM_TIMEOUT_SECONDS = 30
+_MAX_TOOL_ROUNDS = 10  # Max LLM tool call cycles per agent run
 
 
 def create_react_agent(
@@ -167,9 +168,22 @@ def create_react_agent(
 
     def should_continue(state: AgentState) -> str:
         last_message = state["messages"][-1]
-        if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-            return "tools"
-        return "end"
+        if not (hasattr(last_message, "tool_calls") and last_message.tool_calls):
+            return "end"
+
+        # Count how many tool-call rounds have already happened
+        rounds = sum(
+            1 for m in state["messages"]
+            if hasattr(m, "tool_calls") and m.tool_calls
+        )
+        if rounds >= _MAX_TOOL_ROUNDS:
+            logger.warning(
+                "ReAct agent: reached max tool call rounds (%d), ending loop",
+                _MAX_TOOL_ROUNDS,
+            )
+            return "end"
+
+        return "tools"
 
     # ── Graph build ──────────────────────────────────────────────
 
