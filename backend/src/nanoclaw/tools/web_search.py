@@ -1,12 +1,10 @@
-"""Web search tool — multi-engine search with timeout, retry, and graceful fallback.
+"""Web search tool — single-engine search with timeout, retry, and graceful fallback.
 
-Engines tried in order:
-1. Bing (https://www.bing.com) — reliable for most queries
-2. Baidu (https://www.baidu.com) — works in restricted network environments
-3. DuckDuckGo (https://html.duckduckgo.com) — final fallback
+Engine: Sogou (https://www.sogou.com) — Chinese search engine that works
+reliably behind the GFW with server-side rendered HTML.
 
-Each engine has a 10s timeout. If all engines fail, returns a user-friendly
-message rather than hanging or crashing the agent.
+If search fails, returns a user-friendly message rather than hanging or
+crashing the agent.
 """
 
 from __future__ import annotations
@@ -49,74 +47,40 @@ class _Engine:
     def _clean(text: str) -> str:
         return re.sub(r"<[^>]+>", "", text).strip()
 
-    # ── Bing ────────────────────────────────────────────────────────
+    # ── Sogou ──────────────────────────────────────────────────────
 
-    def _extract_bing(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
+    def _extract_sogou(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
         results: list[tuple[str, str, str]] = []
-        # Bing results are in <li class="b_algo"> blocks.
-        # The result <a> is inside <h2>; the snippet is in <p> inside b_caption.
-        blocks = re.split(r'<li[^>]*class="b_algo"[^>]*>', html)[1:]
-        for block in blocks[:max_count]:
-            # Extract URL + title from <h2><a href="...">Title</a></h2>
-            h2_link_m = re.search(
-                r'<h2[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>.*?</h2>',
+        # Sogou results: each result is in a <div class="vrwrap"> block
+        blocks = re.split(r'<div[^>]*class="[^"]*vrwrap[^"]*"[^>]*>', html)[1:]
+        for block in blocks[:max_count * 2]:
+            # URL + title from <a> inside <h3 class="vr-title">
+            title_m = re.search(
+                r'<h3[^>]*>.*?<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>.*?</h3>',
                 block, re.DOTALL,
             )
-            # Extract snippet from <p> inside .b_caption (avoid unrelated <p> tags)
-            caption_p_m = re.search(
-                r'<div[^>]*class="b_caption"[^>]*>.*?<p[^>]*>(.*?)</p>',
-                block, re.DOTALL,
-            )
-            title = self._clean(h2_link_m.group(2)) if h2_link_m else ""
-            url = h2_link_m.group(1) if h2_link_m else ""
-            snippet = self._clean(caption_p_m.group(1)) if caption_p_m else ""
-            if title and url and self._is_valid_url(url):
-                results.append((title, url, snippet))
-        return results
+            if not title_m:
+                # Fallback: look for <a> with href
+                title_m = re.search(
+                    r'<a[^>]*href="(https?://[^"]+)"[^>]*>(.*?)</a>',
+                    block, re.DOTALL,
+                )
+            url = title_m.group(1) if title_m else ""
+            title = self._clean(title_m.group(2)) if title_m else ""
 
-    @staticmethod
-    def _is_valid_url(url: str) -> bool:
-        """Filter out noisy / non-result links."""
-        # Skip navigation, share, feedback links
-        skip_domains = {"stackoverflow.com", "github.com", "facebook.com", "twitter.com"}
-        for skip in skip_domains:
-            if skip in url:
-                return False
-        return True
-
-    # ── Baidu ───────────────────────────────────────────────────────
-
-    def _extract_baidu(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
-        results: list[tuple[str, str, str]] = []
-        # Baidu results — match broad class patterns for "result" blocks
-        # (Baidu frequently changes class names like c-container, new-pmd, etc.)
-        blocks = re.split(
-            r'<div[^>]*class="[^"]*result[^"]*"[^>]*>', html,
-        )[1:]
-        for block in blocks[:max_count * 3]:  # oversample, filter later
-            # Title + URL from <a> links with http/https
-            link_m = re.search(
-                r'<a[^>]+href="(https?://[^"]+)"[^>]*>(.*?)</a>',
-                block, re.DOTALL,
-            )
-            if not link_m:
+            if not title or not url:
                 continue
-            raw_url = link_m.group(1)
-            # Skip Baidu-internal links and navigation
-            if "baidu.com" in raw_url and "/s?" not in raw_url:
-                continue
-            title = self._clean(link_m.group(2))
-            if not title or len(title) < 3:
+            # Skip Sogou internal links
+            if "sogou.com" in url and "/web" not in url:
                 continue
 
-            # Snippet: try multiple patterns Baidu uses
-            url = raw_url
             snippet = ""
+            # Try multiple snippet patterns Sogou uses
             for pat in (
-                r'<div[^>]*class="[^"]*abstract[^"]*"[^>]*>(.*?)</div>',
-                r'<div[^>]*class="[^"]*c-abstract[^"]*"[^>]*>(.*?)</div>',
-                r'<span[^>]*class="[^"]*content-right[^"]*"[^>]*>(.*?)</span>',
-                r'<p[^>]*>(.*?)</p>',
+                r'<p[^>]*class="str_info"[^>]*>(.*?)</p>',
+                r'<p[^>]*class="str-text"[^>]*>(.*?)</p>',
+                r'<div[^>]*class="str-text"[^>]*>(.*?)</div>',
+                r'<div[^>]*class="space-txt"[^>]*>(.*?)</div>',
             ):
                 sm = re.search(pat, block, re.DOTALL)
                 if sm:
@@ -129,30 +93,12 @@ class _Engine:
                 break
         return results
 
-    # ── DuckDuckGo ──────────────────────────────────────────────────
-
-    def _extract_duckduckgo(self, html: str, max_count: int) -> list[tuple[str, str, str]]:
-        results: list[tuple[str, str, str]] = []
-        blocks = re.split(r'<div class="result[^"]*"', html)[1:] if '<div class="result' in html else []
-        for block in blocks[:max_count]:
-            title_m = re.search(r'class="result__a"[^>]*>(.*?)</a>', block, re.DOTALL)
-            url_m = re.search(r'href="(https?://[^"]+)"', block)
-            snippet_m = re.search(r'class="result__snippet"[^>]*>(.*?)</(?:a|div)>', block, re.DOTALL)
-            title = self._clean(title_m.group(1)) if title_m else ""
-            url = url_m.group(1) if url_m else ""
-            snippet = self._clean(snippet_m.group(1)) if snippet_m else ""
-            if title and url:
-                results.append((title, url, snippet))
-        return results
-
 
 # ── Engine list ─────────────────────────────────────────────────────
 
-# Only Baidu — works reliably for Chinese queries under GFW.
-# Bing and DuckDuckGo are removed because their HTML parsing is
-# brittle and often returns irrelevant/noisy results.
+# Sogou — Chinese search engine, server-rendered, works behind GFW.
 _ENGINES = [
-    _Engine("baidu", "https://www.baidu.com/s", "GET", "wd"),
+    _Engine("sogou", "https://www.sogou.com/web", "GET", "query"),
 ]
 
 
