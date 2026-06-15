@@ -348,10 +348,22 @@ def create_app() -> FastAPI:
                 except asyncio.CancelledError:
                     pass
                 except Exception as exc:
+                    error_msg = str(exc)[:500]
                     try:
+                        # Send fallback content so the user gets a response
+                        # even when infrastructure fails (e.g. Redis timeout)
+                        await sse_queue.put({
+                            "event": "message_chunk",
+                            "data": {
+                                "content": (
+                                    "I wasn't able to complete the request. "
+                                    f"Error: {error_msg}"
+                                ),
+                            },
+                        })
                         await sse_queue.put({
                             "event": "error",
-                            "data": {"message": str(exc)[:500], "task_id": "root"},
+                            "data": {"message": error_msg, "task_id": "root"},
                         })
                     except Exception:
                         logger.warning('SSE queue put error', exc_info=True)
