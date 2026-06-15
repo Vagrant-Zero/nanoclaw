@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Text } from "ink";
+import { SseParser } from "../sse-parser.js";
+import type { DoneData } from "../types.js";
 import type {
   SubtaskInfo,
   CheckResultData,
@@ -10,7 +12,8 @@ import type { ExperienceEntry } from "../types.js";
 interface Props {
   baseUrl: string;
   message: string;
-  onDone: (text: string) => void;
+  threadId?: string;
+  onDone: (text: string, sessionId: string) => void;
   onThink?: (content: string) => void;
   onAction?: (tool: string, args: Record<string, unknown>) => void;
   onObservation?: (tool: string, result: string) => void;
@@ -22,15 +25,20 @@ interface Props {
 }
 
 /**
- * Opens an SSE stream to /chat/stream, parses the protocol events.
+ * Opens an SSE stream to /chat/stream, parses events using the shared
+ * SSE parser, and dispatches them to the relevant callbacks.
  *
- * Phase 1 events: agent_think, agent_action, agent_observation, message_chunk
- * Phase 2 events: agent_plan, task_status, check_result, iteration_exhausted
- * All forwarded to their respective callbacks.
+ * Fixes over the previous implementation:
+ * - Uses SseParser for proper event buffering (handles cross-chunk splits)
+ * - Uses AbortController — component cleanup actually aborts the fetch
+ * - Handles `done` event explicitly (not just connection close)
+ * - Accepts `threadId` prop for multi-turn session continuity
+ * - All callbacks stored via refs to eliminate stale closure issues
  */
 export function StreamingChat({
   baseUrl,
   message,
+  threadId,
   onDone,
   onThink,
   onAction,
@@ -44,20 +52,43 @@ export function StreamingChat({
   const [content, setContent] = useState("");
   const [error, setError] = useState<string | null>(null);
   const [connected, setConnected] = useState(false);
+
+  // Refs for mutable state shared with the async loop
+  const fullTextRef = useRef("");
+
+  // Refs for callbacks — prevents stale closures in useEffect
   const onDoneRef = useRef(onDone);
   onDoneRef.current = onDone;
+  const onThinkRef = useRef(onThink);
+  onThinkRef.current = onThink;
+  const onActionRef = useRef(onAction);
+  onActionRef.current = onAction;
+  const onObservationRef = useRef(onObservation);
+  onObservationRef.current = onObservation;
+  const onPlanRef = useRef(onPlan);
+  onPlanRef.current = onPlan;
+  const onTaskStatusRef = useRef(onTaskStatus);
+  onTaskStatusRef.current = onTaskStatus;
+  const onCheckResultRef = useRef(onCheckResult);
+  onCheckResultRef.current = onCheckResult;
+  const onIterationExhaustedRef = useRef(onIterationExhausted);
+  onIterationExhaustedRef.current = onIterationExhausted;
+  const onExperienceRef = useRef(onExperience);
+  onExperienceRef.current = onExperience;
 
   useEffect(() => {
     if (!message) return;
-    let cancelled = false;
-    let fullText = "";
+    let completed = false;
+    const abortController = new AbortController();
+    fullTextRef.current = "";
 
     const run = async () => {
       try {
         const res = await fetch(`${baseUrl}/chat/stream`, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message }),
+          body: JSON.stringify({ message, thread_id: threadId ?? null }),
+          signal: abortController.signal,
         });
 
         if (!res.ok) {
@@ -74,74 +105,90 @@ export function StreamingChat({
         setConnected(true);
         const reader = res.body.getReader();
         const decoder = new TextDecoder();
-        let currentEvent = "";
+        const parser = new SseParser();
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done || cancelled) break;
+
+          // Stream ended by the server — flush parser buffer
+          if (done) {
+            for (const evt of parser.flush()) {
+              dispatch(evt.event, evt.data);
+            }
+            break;
+          }
 
           const text = decoder.decode(value, { stream: true });
-          const lines = text.split(/\r?\n/);
-
-          for (const line of lines) {
-            if (!line) continue;
-            if (line.startsWith("event: ")) {
-              currentEvent = line.slice(7);
-            } else if (line.startsWith("data: ")) {
-              const data = JSON.parse(line.slice(6));
-              switch (currentEvent) {
-                case "agent_think":
-                  onThink?.(data.content);
-                  break;
-                case "agent_action":
-                  onAction?.(data.tool, data.args);
-                  break;
-                case "agent_observation":
-                  onObservation?.(data.tool, data.result);
-                  break;
-                case "agent_plan":
-                  onPlan?.(data.tasks ?? []);
-                  break;
-                case "task_status":
-                  onTaskStatus?.(data.task_id, data.status);
-                  break;
-                case "check_result":
-                  onCheckResult?.(data);
-                  break;
-                case "iteration_exhausted":
-                  onIterationExhausted?.(data);
-                  break;
-                case "experience_ready":
-                  onExperience?.(data);
-                  break;
-                case "error":
-                  setError(data.message || "Backend error");
-                  break;
-                case "message_chunk":
-                  fullText += data.content;
-                  setContent(fullText);
-                  break;
-              }
-            }
+          for (const evt of parser.feed(text)) {
+            dispatch(evt.event, evt.data);
           }
         }
-      } catch (err: any) {
-        if (!cancelled) {
-          setError(err?.message || "Connection failed");
+      } catch (err: unknown) {
+        // AbortError is expected on component unmount, not a real error
+        if (err instanceof DOMException && err.name === "AbortError") {
+          return;
+        }
+        if (!completed) {
+          setError((err as Error)?.message || "Connection failed");
         }
         return;
       }
 
-      if (!cancelled) {
-        onDoneRef.current(fullText);
+      completed = true;
+      onDoneRef.current(fullTextRef.current, "");
+    };
+
+    const dispatch = (event: string, data: unknown) => {
+      if (typeof data !== "object" || data === null) return;
+      const d = data as Record<string, unknown>;
+
+      switch (event) {
+        case "agent_think":
+          onThinkRef.current?.(d.content as string);
+          break;
+        case "agent_action":
+          onActionRef.current?.(d.tool as string, d.args as Record<string, unknown>);
+          break;
+        case "agent_observation":
+          onObservationRef.current?.(d.tool as string, d.result as string);
+          break;
+        case "agent_plan":
+          onPlanRef.current?.((d.tasks ?? []) as SubtaskInfo[]);
+          break;
+        case "task_status":
+          onTaskStatusRef.current?.(d.task_id as string, d.status as string);
+          break;
+        case "check_result":
+          onCheckResultRef.current?.(d as unknown as CheckResultData);
+          break;
+        case "iteration_exhausted":
+          onIterationExhaustedRef.current?.(d as unknown as IterationExhaustedData);
+          break;
+        case "experience_ready":
+          onExperienceRef.current?.(d as unknown as ExperienceEntry);
+          break;
+        case "error":
+          setError((d.message as string) || "Backend error");
+          break;
+        case "message_chunk":
+          fullTextRef.current += d.content as string;
+          setContent(fullTextRef.current);
+          break;
+        case "done":
+          completed = true;
+          const doneData = d as unknown as DoneData;
+          onDoneRef.current(fullTextRef.current, doneData.session_id);
+          break;
       }
     };
 
     run();
+
+    // Cleanup: abort the fetch on unmount
     return () => {
-      cancelled = true;
+      abortController.abort();
     };
-  }, [message]);
+  }, [message, baseUrl, threadId]);
 
   if (error) {
     return <Text color="red">Error: {error}</Text>;

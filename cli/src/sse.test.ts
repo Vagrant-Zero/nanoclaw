@@ -1,6 +1,7 @@
 import { describe, test, expect } from "vitest";
+import { SseParser } from "./sse-parser.js";
 
-// ── extract the pure SSE-parsing logic from StreamingChat ──
+// ── simulates the parent App's state accumulator functions ──
 
 interface ParsedEvent {
   type:
@@ -11,36 +12,6 @@ interface ParsedEvent {
     | "unknown";
   data: Record<string, unknown>;
 }
-
-/** Pure function that simulates what StreamingChat does internally.
- *  Takes raw SSE text lines, returns parsed events in order.
- */
-function parseSSE(lines: string[]): ParsedEvent[] {
-  const events: ParsedEvent[] = [];
-  let currentEvent = "";
-
-  for (const line of lines) {
-    if (!line) continue;
-    if (line.startsWith("event: ")) {
-      currentEvent = line.slice(7);
-    } else if (line.startsWith("data: ")) {
-      const data = JSON.parse(line.slice(6));
-      const type = [
-        "agent_think",
-        "agent_action",
-        "agent_observation",
-        "message_chunk",
-      ].includes(currentEvent)
-        ? (currentEvent as ParsedEvent["type"])
-        : "unknown";
-
-      events.push({ type, data });
-    }
-  }
-  return events;
-}
-
-// ── simulates the parent App's state accumulator functions ──
 
 function simulateToolCallFlow(
   events: ParsedEvent[]
@@ -91,26 +62,55 @@ function simulateToolCallFlow(
   return { thinkText, toolCalls, answerText };
 }
 
+function parseEvents(raw: string[]): ParsedEvent[] {
+  const parser = new SseParser();
+  const joined = raw.join("\n");
+
+  // If the last line is a complete event (data line), append double newline
+  // to simulate an event boundary so it gets emitted.
+  const chunk = joined.endsWith("\n\n") ? joined : joined + "\n\n";
+
+  const events = parser.feed(chunk);
+
+  return events.map((evt) => {
+    const type = [
+      "agent_think",
+      "agent_action",
+      "agent_observation",
+      "message_chunk",
+    ].includes(evt.event)
+      ? (evt.event as ParsedEvent["type"])
+      : "unknown";
+
+    return { type, data: evt.data as Record<string, unknown> };
+  });
+}
+
 // ── tests ──
 
-describe("SSE parsing (StreamingChat logic)", () => {
+describe("SseParser (shared parser)", () => {
   test("parse tool-call SSE stream correctly", () => {
     const raw = [
       "event: task_status",
       'data: {"task_id":"root","status":"RUNNING"}',
+      "",
       "event: agent_think",
       'data: {"content":"读取文件","task_id":"root"}',
+      "",
       "event: agent_action",
       'data: {"tool":"read_file","args":{"file_path":"/etc/hosts"},"task_id":"root"}',
+      "",
       "event: agent_observation",
       'data: {"tool":"read_file","result":"127.0.0.1 localhost","task_id":"root"}',
+      "",
       "event: message_chunk",
       'data: {"content":"文件内容","task_id":"root"}',
+      "",
       "event: done",
       'data: {"session_id":"abc-123"}',
     ];
 
-    const events = parseSSE(raw);
+    const events = parseEvents(raw);
     const result = simulateToolCallFlow(events);
 
     // think → thought is preserved
@@ -132,15 +132,18 @@ describe("SSE parsing (StreamingChat logic)", () => {
     const raw = [
       "event: task_status",
       'data: {"task_id":"root","status":"RUNNING"}',
+      "",
       "event: message_chunk",
       'data: {"content":"Hello","task_id":"root"}',
+      "",
       "event: message_chunk",
       'data: {"content":" world","task_id":"root"}',
+      "",
       "event: done",
       'data: {"session_id":"x"}',
     ];
 
-    const events = parseSSE(raw);
+    const events = parseEvents(raw);
     const result = simulateToolCallFlow(events);
 
     expect(result.thinkText).toBe("");
@@ -148,25 +151,58 @@ describe("SSE parsing (StreamingChat logic)", () => {
     expect(result.answerText).toBe("Hello world");
   });
 
+  test("handles cross-chunk split events (buffer test)", () => {
+    // Simulate a chunk that ends mid-event: the data line is split
+    // across two chunks.
+    const parser = new SseParser();
+    const chunk1 = "event: message_chunk\n";
+    const chunk2 = 'data: {"content":"Hello"}\n\nevent: done\n';
+    const chunk3 = 'data: {"session_id":"x"}\n\n';
+
+    let events = parser.feed(chunk1);
+    expect(events.length).toBe(0); // incomplete event buffered
+
+    events = parser.feed(chunk2);
+    expect(events.length).toBe(1); // message_chunk emitted
+    expect(events[0].event).toBe("message_chunk");
+
+    events = parser.feed(chunk3);
+    expect(events.length).toBe(1); // done emitted
+    expect(events[0].event).toBe("done");
+  });
+
   test("no duplication: think text is not echoed into answer", () => {
     // If the backend sent both agent_think and message_chunk for the same
-    // text, our accumulator would put them in both places — verify that
+    // text, the accumulator puts them in both places — verify that
     // the caller only renders one.
     const raw = [
       "event: task_status",
       'data: {"task_id":"root","status":"RUNNING"}',
+      "",
       "event: agent_think",
       'data: {"content":"文件内容...","task_id":"root"}',
+      "",
       "event: message_chunk",
       'data: {"content":"文件内容...","task_id":"root"}',
     ];
 
-    const events = parseSSE(raw);
+    const events = parseEvents(raw);
     const result = simulateToolCallFlow(events);
 
     // They land in different buckets — it's up to the backend to not
     // double-emit, so this test documents the contract.
     expect(result.thinkText).toBe("文件内容...");
     expect(result.answerText).toBe("文件内容...");
+  });
+
+  test("flush returns remaining buffered data", () => {
+    const parser = new SseParser();
+    parser.feed('event: message_chunk\ndata: {"content":"a"}\n\n');
+    // Feed a partial event (no trailing newline)
+    parser.feed('event: done\ndata: {"session_id":"y"}');
+
+    const flushed = parser.flush();
+    expect(flushed.length).toBe(1);
+    expect(flushed[0].event).toBe("done");
   });
 });

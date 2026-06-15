@@ -31,8 +31,8 @@ while (true) {
 
   history.push(input)
   try {
-    const response = await sendMessageStream(config.baseUrl, { message: input })
-    history.push(response)
+    const { text } = await sendMessageStream(config.baseUrl, { message: input })
+    history.push(text)
   } catch (error) {
     console.error(`\nError: ${error}\n`)
   }

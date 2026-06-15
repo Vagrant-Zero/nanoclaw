@@ -1,4 +1,5 @@
 import type { HealthResponse, ChatRequest, ChatResponse } from "./types.js"
+import { SseParser } from "./sse-parser.js"
 
 const BASE_URL = "http://127.0.0.1:8420"
 
@@ -18,44 +19,66 @@ export async function sendMessage(baseUrl: string, req: ChatRequest): Promise<Ch
   return res.json()
 }
 
-export async function sendMessageStream(baseUrl: string, req: ChatRequest): Promise<string> {
+export interface StreamResult {
+  text: string
+  sessionId: string
+}
+
+/** Stream the response, emitting progress to stdout as SSE events arrive. */
+export async function sendMessageStream(
+  baseUrl: string,
+  req: ChatRequest,
+  signal?: AbortSignal,
+): Promise<StreamResult> {
   const res = await fetch(`${baseUrl}/chat/stream`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(req),
+    signal,
   })
 
   const reader = res.body!.getReader()
   const decoder = new TextDecoder()
+  const parser = new SseParser()
   let result = ""
-
-  let currentEvent = ""
+  let sessionId = ""
 
   while (true) {
     const { done, value } = await reader.read()
-    if (done) break
+    if (done) {
+      // Flush any remaining buffered SSE data
+      for (const evt of parser.flush()) {
+        handleEvent(evt)
+      }
+      break
+    }
 
     const text = decoder.decode(value, { stream: true })
-    const lines = text.split(/\r?\n/)
-
-    for (const line of lines) {
-      if (!line) continue
-      if (line.startsWith("event: ")) {
-        currentEvent = line.slice(7)
-      } else if (line.startsWith("data: ")) {
-        const data = JSON.parse(line.slice(6))
-        if (currentEvent === "message_chunk") {
-          process.stdout.write(data.content)
-          result += data.content
-        } else if (currentEvent === "tool_call") {
-          process.stdout.write(`\n[use tool: ${data.name}]\n`)
-        }
-      }
+    for (const evt of parser.feed(text)) {
+      handleEvent(evt)
     }
   }
 
   process.stdout.write("\n")
-  return result
+  return { text: result, sessionId }
+
+  function handleEvent(evt: { event: string; data: unknown }): void {
+    if (!evt.data || typeof evt.data !== "object") return
+    const d = evt.data as Record<string, unknown>
+
+    switch (evt.event) {
+      case "message_chunk":
+        process.stdout.write(d.content as string)
+        result += d.content as string
+        break
+      case "tool_call":
+        process.stdout.write(`\n[use tool: ${d.name}]\n`)
+        break
+      case "done":
+        sessionId = (d as { session_id: string }).session_id || ""
+        break
+    }
+  }
 }
 
 
