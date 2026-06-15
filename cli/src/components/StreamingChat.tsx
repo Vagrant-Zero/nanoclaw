@@ -1,7 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { Text } from "ink";
 import { SseParser } from "../sse-parser.js";
-import { appendFileSync, writeFileSync, mkdirSync } from "node:fs";
 import type {
   SubtaskInfo,
   CheckResultData,
@@ -77,9 +76,6 @@ export function StreamingChat({
   const onExperienceRef = useRef(onExperience);
   onExperienceRef.current = onExperience;
 
-  const DEBUG_LOG = "/tmp/nanoclaw-sse.log";
-  try { mkdirSync("/tmp", { recursive: true }); writeFileSync(DEBUG_LOG, ""); } catch {}
-
   useEffect(() => {
     if (!message) return;
     let completed = false;
@@ -144,14 +140,14 @@ export function StreamingChat({
       // triggers component unmount (React 18 batch avoidance).
       const finalText = fullTextRef.current;
       setTimeout(() => {
-        appendFileSync(DEBUG_LOG, `[SSE] onDone finalText="${finalText}" sessionId="${completed ? sessionIdRef.current : ""}"\n`);
+        process.stderr.write(`[SSE] onDone finalText="${finalText}" sessionId="${completed ? sessionIdRef.current : ""}"\n`);
         onDoneRef.current(finalText, completed ? sessionIdRef.current : "");
       }, 0);
     };
 
     const dispatch = (event: string, data: unknown) => {
       // Debug: log all SSE events to stderr
-      appendFileSync(DEBUG_LOG, `[SSE] event=${event} data=${JSON.stringify(data)}\n`);
+      process.stderr.write(`[SSE] event=${event} data=${JSON.stringify(data)}\n`);
       if (typeof data !== "object" || data === null) return;
       const d = data as Record<string, unknown>;
 
@@ -185,7 +181,7 @@ export function StreamingChat({
           break;
         case "message_chunk":
           fullTextRef.current += d.content as string;
-          appendFileSync(DEBUG_LOG, `[SSE] message_chunk content="${d.content}" total="${fullTextRef.current}"\n`);
+          process.stderr.write(`[SSE] message_chunk content="${d.content}" total="${fullTextRef.current}"\n`);
           setContent(fullTextRef.current);
           break;
         case "done":
