@@ -14,14 +14,15 @@ from __future__ import annotations
 import json
 import re
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
-from nanoclaw.models.task import CheckResult, CheckerFeedback
+from nanoclaw.models.task import CheckResult, CheckerFeedback, Subtask
 
 if TYPE_CHECKING:
-    from nanoclaw.models.task import Criterion, Rubric, Subtask
+    from nanoclaw.models.task import Criterion, Rubric
 
 
 @dataclass
@@ -41,7 +42,7 @@ class CriterionResult:
 _RULE_EVALUATORS: list[tuple[re.Pattern, str]] = []
 
 
-def _check_file_ops(criterion: Criterion, task: Any, result: str) -> tuple[bool, str]:  # noqa: ARG001
+def _check_file_ops(criterion: Criterion, task: Subtask, result: str) -> tuple[bool, str]:  # noqa: ARG002
     """Rule check: file operation was successful (no error)."""
     if not result.strip():
         return False, "Result is empty"
@@ -51,14 +52,14 @@ def _check_file_ops(criterion: Criterion, task: Any, result: str) -> tuple[bool,
     return True, "File operation successful"
 
 
-def _check_non_empty(criterion: Criterion, task: Any, result: str) -> tuple[bool, str]:  # noqa: ARG001
+def _check_non_empty(criterion: Criterion, task: Subtask, result: str) -> tuple[bool, str]:  # noqa: ARG002
     """Rule check: result is non-empty."""
     if not result.strip():
         return False, "Result is empty"
     return True, "Output is non-empty"
 
 
-def _check_no_error(criterion: Criterion, task: Any, result: str) -> tuple[bool, str]:  # noqa: ARG001
+def _check_no_error(criterion: Criterion, task: Subtask, result: str) -> tuple[bool, str]:  # noqa: ARG002
     """Rule check: result contains no error indicators."""
     if not result.strip():
         return False, "Result is empty"
@@ -95,7 +96,7 @@ class Checker:
             # ... re-route or re-plan
     """
 
-    def __init__(self, llm: Any | None = None) -> None:
+    def __init__(self, llm: BaseChatModel | None = None) -> None:
         self._llm = llm
         self._last_criterion_results: list[CriterionResult] = []
         self._last_feedback: CheckerFeedback | None = None

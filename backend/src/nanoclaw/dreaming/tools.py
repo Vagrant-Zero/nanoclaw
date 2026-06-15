@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from langchain_core.language_models.chat_models import BaseChatModel
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -264,7 +265,7 @@ class LlmAnalyzeTool(BaseTool):
         },
     )
 
-    def __init__(self, llm: Any) -> None:
+    def __init__(self, llm: BaseChatModel) -> None:
         self._llm = llm
 
     def run(  # type: ignore[override]
@@ -294,7 +295,7 @@ def register_dreaming_tools(
     registry: Any,
     eval_base_dir: str,
     memory_store: MemoryStore,
-    llm: Any,
+    llm: BaseChatModel,
 ) -> None:
     """Register all four Dreaming tools on an existing ``ToolRegistry``."""
     from nanoclaw.tools.registry import ToolRegistry

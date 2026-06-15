@@ -8,7 +8,8 @@ unconfirmed MemoryEntries for user approval.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from langchain_core.messages import HumanMessage, SystemMessage
 
@@ -16,8 +17,6 @@ from nanoclaw.memory.types import MemoryEntry, MemoryType
 
 if TYPE_CHECKING:
     from nanoclaw.memory.store import MemoryStore
-
-
 _REFLECTION_SYSTEM_PROMPT = """You are a reflection engine. Analyse the task execution trace below and extract structured learnings.
 
 Return a JSON object with an "entries" array. Each entry has:
@@ -33,7 +32,6 @@ Rules:
 - Be concise — each entry under 200 chars.
 - Only extract what's genuinely observable from the trace."""
 
-
 class ReflectionEngine:
     """Generates experience entries from completed task executions.
 
@@ -48,7 +46,7 @@ class ReflectionEngine:
     def __init__(
         self,
         memory_store: MemoryStore,
-        llm: Any | None = None,
+        llm: BaseChatModel | None = None,
     ) -> None:
         self._store = memory_store
         self._llm = llm
@@ -92,7 +90,7 @@ class ReflectionEngine:
                         "type": entry.type.value,
                     })
             except Exception:
-                pass  # Per-entry failure should not cascade
+                logger.warning('Reflection subtask error', exc_info=True)  # Per-entry failure should not cascade
 
     # ── Internal ──
 

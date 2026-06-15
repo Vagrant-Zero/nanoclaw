@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 from typing import Any
+from sqlalchemy.engine import Row
 
 from croniter import croniter
 from sqlalchemy import text
@@ -169,7 +170,7 @@ class PgScheduledTaskRepo(ScheduledTaskRepo):
 
     # ── Internal helpers ───────────────────────────────────────────
 
-    def _row_to_task(self, row: Any) -> ScheduledTask:
+    def _row_to_task(self, row: Row) -> ScheduledTask:
         """Convert a SQLAlchemy row proxy to a ScheduledTask."""
         return ScheduledTask(
             id=row.id,

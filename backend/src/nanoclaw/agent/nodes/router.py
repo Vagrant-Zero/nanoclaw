@@ -8,8 +8,8 @@ The LLM fallback uses response_format to guarantee clean JSON output.
 from __future__ import annotations
 
 import json
-from typing import Any
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 # ── Heuristic thresholds ──────────────────────────────────────────────
@@ -51,7 +51,7 @@ _FALLBACK_SYSTEM_PROMPT = SystemMessage(
 )
 
 
-async def _llm_fallback(llm: Any, content: str) -> str:
+async def _llm_fallback(llm: BaseChatModel, content: str) -> str:
     """Call LLM to classify ambiguous requests. Returns 'react' or 'plan'.
 
     Uses ``response_format={"type": "json_object"}`` to force the API
@@ -69,7 +69,7 @@ async def _llm_fallback(llm: Any, content: str) -> str:
         return "react"
 
 
-def create_router_node(llm: Any):
+def create_router_node(llm: BaseChatModel):
     """Create an async router node for the Supervisor graph.
 
     The returned function accepts a LangGraph state dict and returns

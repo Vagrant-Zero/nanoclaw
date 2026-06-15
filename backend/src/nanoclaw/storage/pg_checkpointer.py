@@ -12,6 +12,7 @@ import json
 from sqlalchemy import text
 
 from nanoclaw.models.task import CheckpointState
+from nanoclaw.storage._jsonb import deserialize_jsonb
 from nanoclaw.storage.checkpointer import Checkpointer
 from nanoclaw.storage.db import get_session
 
@@ -52,7 +53,7 @@ class PgCheckpointer(Checkpointer):
             ).fetchone()
         if row is None or row.serialized_state is None:
             return None
-        return CheckpointState.from_dict(row.serialized_state if isinstance(row.serialized_state, (dict, list)) else json.loads(row.serialized_state))
+        return CheckpointState.from_dict(deserialize_jsonb(row.serialized_state))
 
     async def list_sessions(self) -> list[str]:
         async with get_session() as s:

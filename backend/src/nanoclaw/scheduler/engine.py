@@ -12,7 +12,8 @@ import asyncio
 import time
 from datetime import datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from nanoclaw.models.chat import Session as ChatSession
 from nanoclaw.models.task import Subtask, TaskPlan
@@ -29,9 +30,7 @@ if TYPE_CHECKING:
 _SCHEDULER_POLL_SECONDS = 60
 _DREAMING_HOUR = 2  # 02:00
 
-
 # ── Scheduler ──────────────────────────────────────────────────────
-
 
 class Scheduler:
     """Background daemon that dispatches due scheduled tasks and dreaming.
@@ -49,7 +48,7 @@ class Scheduler:
         task_repo: ScheduledTaskRepo,
         session_repo: SessionRepository,
         eval_logger: EventLogger,
-        llm: Any,
+        llm: BaseChatModel,
         tool_registry: ToolRegistry,
         dreaming_engine: DreamingEngine | None = None,
         dreams_dir: str = ".nanoclaw/dreams",
@@ -104,7 +103,7 @@ class Scheduler:
             try:
                 await self._check_and_dispatch()
             except Exception:
-                pass  # Non-fatal — loop keeps running
+                logger.warning('Scheduler loop error', exc_info=True)  # Non-fatal — loop keeps running
             await asyncio.sleep(_SCHEDULER_POLL_SECONDS)
 
     async def _check_and_dispatch(self) -> None:
@@ -126,7 +125,6 @@ class Scheduler:
         from nanoclaw.agent.nodes.react_agent import create_react_agent
         from nanoclaw.agent.worker_pool import WorkerPool
         from nanoclaw.storage.task_queue import MemoryQueue
-
         self._running_tasks.add(task.id)
         try:
             task_queue = MemoryQueue()

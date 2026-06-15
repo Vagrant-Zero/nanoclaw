@@ -9,8 +9,9 @@ planner's intent.
 from __future__ import annotations
 
 import json
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
 
 from nanoclaw.agent.checker.rubric_validator import RubricValidator
@@ -91,7 +92,7 @@ def _build_planner_prompt(tools_info: list[dict]) -> SystemMessage:
 
 
 def create_planner_node(
-    llm: Any,
+    llm: BaseChatModel,
     tool_registry: ToolRegistry,
 ) -> Callable:
     """Create an async planner node for the Supervisor graph.

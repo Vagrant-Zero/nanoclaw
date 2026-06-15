@@ -19,14 +19,11 @@ from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
 if TYPE_CHECKING:
     from nanoclaw.memory.store import MemoryStore
     from nanoclaw.models.chat import ChatMessage
-
-
 DEFAULT_SYSTEM_PROMPT = (
     "You are Nanoclaw, a personal AI assistant. "
     "Help the user accomplish their tasks by reasoning step by step and "
     "using the available tools when appropriate. Be concise and precise."
 )
-
 
 @dataclass
 class SessionContext:
@@ -37,7 +34,6 @@ class SessionContext:
 
     id: str
     messages: list[ChatMessage] = field(default_factory=list)
-
 
 class ContextManager:
     """Assembles LLM prompts from memory, session history, and task state.
@@ -117,7 +113,7 @@ class ContextManager:
                     )
                 )
         except Exception:
-            pass  # Memory failure should not crash the prompt
+            logger.warning('Context manager error', exc_info=True)  # Memory failure should not crash the prompt
 
     async def _inject_skills(self, messages: list, subtask: object) -> None:
         """Inject relevant skills as system messages."""

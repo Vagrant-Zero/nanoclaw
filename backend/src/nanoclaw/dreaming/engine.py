@@ -12,6 +12,7 @@ import time
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+from langchain_core.language_models.chat_models import BaseChatModel
 
 from nanoclaw.models.chat import Session as ChatSession
 from nanoclaw.models.task import Subtask, TaskPlan
@@ -46,7 +47,7 @@ class DreamingEngine:
         eval_logger: EventLogger,
         memory_store: MemoryStore,
         session_repo: SessionRepository,
-        llm: Any,
+        llm: BaseChatModel,
         dreaming_tools: ToolRegistry,
         task_queue: TaskQueue | None = None,
         eval_base_dir: str = "",

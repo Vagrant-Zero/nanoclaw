@@ -10,9 +10,11 @@ from __future__ import annotations
 import asyncio
 import json
 import time
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langgraph.graph import END, StateGraph
+from langgraph.graph.state import CompiledStateGraph
 
 from nanoclaw.agent.state import AgentState
 from nanoclaw.tools.registry import ToolRegistry
@@ -31,9 +33,9 @@ def create_react_agent(
     tool_registry: ToolRegistry,
     llm_timeout: float = _LLM_TIMEOUT_SECONDS,
     sse_callback: Callable[[str, dict], Awaitable[None]] | None = None,
-    context_manager: Any | None = None,
-    event_logger: Any | None = None,
-) -> Any:
+    context_manager: ContextManager | None = None,
+    event_logger: EventLogger | None = None,
+) -> CompiledStateGraph:
     """Create a compiled ReAct LangGraph.
 
     Args:

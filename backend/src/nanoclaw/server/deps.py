@@ -8,12 +8,14 @@ of ``NANOCLAW_DB_URL`` and ``NANOCLAW_REDIS_URL`` environment variables.
 from __future__ import annotations
 
 from functools import lru_cache
-from typing import Any
+from langchain_core.language_models.chat_models import BaseChatModel
+from langgraph.graph.state import CompiledStateGraph
 
 from langchain_openai import ChatOpenAI
 
 from nanoclaw.agent.supervisor_graph import create_supervisor
 from nanoclaw.config import settings
+from nanoclaw.scheduler.repo import ScheduledTaskRepo
 from nanoclaw.storage.checkpointer import Checkpointer, LocalFileCheckpointer
 from nanoclaw.storage.session_repo import SessionRepository
 from nanoclaw.storage.task_queue import TaskQueue
@@ -72,7 +74,7 @@ def get_checkpointer() -> Checkpointer:
     return _checkpointer
 
 
-def get_scheduled_task_repo() -> Any:
+def get_scheduled_task_repo() -> ScheduledTaskRepo:
     """Return ScheduledTaskRepo: PgScheduledTaskRepo if db_url is set, else Memory."""
     if is_production():
         from nanoclaw.scheduler.pg_repo import PgScheduledTaskRepo
@@ -95,7 +97,7 @@ def create_queue(session_id: str) -> TaskQueue:
 
 
 @lru_cache
-def get_llm() -> Any:
+def get_llm() -> BaseChatModel:
     """Create the LangChain chat model (singleton).
 
     Uses langchain-openai with DeepSeek-compatible base URL.
@@ -128,7 +130,7 @@ def get_tool_registry() -> ToolRegistry:
 
 
 @lru_cache
-def get_supervisor() -> Any:
+def get_supervisor() -> CompiledStateGraph:
     """Create the compiled Supervisor graph (singleton).
 
     Injects LLM, tool registry, and session repo at construction time.

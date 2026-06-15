@@ -38,22 +38,18 @@ from nanoclaw.storage.db import close_db, init_db
 from nanoclaw.storage.redis_client import close_redis, get_redis
 from nanoclaw.tools.registry import ToolRegistry
 
-
 class ChatRequest(BaseModel):
     message: str
     thread_id: str | None = None
-
 
 class HealthResponse(BaseModel):
     status: str
     version: str
 
-
 class ToolCallInfo(BaseModel):
     name: str
     args: dict
     result: str | None = None
-
 
 class CreateScheduleRequest(BaseModel):
     description: str
@@ -61,15 +57,12 @@ class CreateScheduleRequest(BaseModel):
     schedule: str
     enabled: bool = True
 
-
 class ChatResponse(BaseModel):
     response: str
     thread_id: str | None
     tool_calls: list[ToolCallInfo]
 
-
 # ── Lifespan ─────────────────────────────────────────────────────────
-
 
 @asynccontextmanager
 async def lifespan(app: FastAPI):
@@ -133,7 +126,6 @@ async def lifespan(app: FastAPI):
     # Phase 5: Close infrastructure connections
     await close_db()
     await close_redis()
-
 
 def create_app() -> FastAPI:
     """Create and configure the FastAPI application."""
@@ -235,7 +227,6 @@ def create_app() -> FastAPI:
         # Per-request task queue and worker pool
         from nanoclaw.agent.nodes.react_agent import create_react_agent
         from nanoclaw.agent.worker_pool import WorkerPool
-
         task_queue = create_queue(session_id)
         worker_react_agent = create_react_agent(
             llm, tool_registry, sse_callback=sse_callback,
@@ -314,7 +305,7 @@ def create_app() -> FastAPI:
                             "data": {"message": str(exc)[:500], "task_id": "root"},
                         })
                     except Exception:
-                        pass
+                        logger.warning('SSE queue put error', exc_info=True)
                 finally:
                     try:
                         await worker_pool.stop()

@@ -14,6 +14,7 @@ import json
 from sqlalchemy import text
 
 from nanoclaw.models.chat import ChatMessage, Session
+from nanoclaw.storage._jsonb import deserialize_jsonb_list
 from nanoclaw.storage.db import get_session
 from nanoclaw.storage.session_repo import SessionRepository
 
@@ -64,11 +65,7 @@ class PgSessionRepo(SessionRepository):
             ).fetchone()
         if row is None:
             return None
-        # row.history is already a Python list (JSONB auto-deserialized by asyncpg)
-        if isinstance(row.history, str):
-            raw = json.loads(row.history)
-        else:
-            raw = list(row.history)
+        raw = deserialize_jsonb_list(row.history)
         messages = [ChatMessage.from_dict(m) for m in raw]
         # active_plan_id is read for round-trip preservation; the full
         # TaskPlan is loaded separately via TaskRepository.get_plan().
@@ -90,8 +87,7 @@ class PgSessionRepo(SessionRepository):
             if row is None:
                 msg_text = f"Session {session_id!r} not found"
                 raise ValueError(msg_text)
-            # row.history is a Python list (JSONB auto-deserialized by asyncpg)
-            history = list(row.history) if isinstance(row.history, list) else json.loads(row.history)
+            history = deserialize_jsonb_list(row.history)
             history.append(msg.to_dict())
             await s.execute(
                 text("""
@@ -113,6 +109,4 @@ class PgSessionRepo(SessionRepository):
         if row is None:
             msg_text = f"Session {session_id!r} not found"
             raise ValueError(msg_text)
-                # row.history is a Python list (JSONB auto-deserialized by asyncpg)
-        raw = list(row.history) if isinstance(row.history, list) else json.loads(row.history)
-        return [ChatMessage.from_dict(m) for m in raw]
+        raw = deserialize_jsonb_list(row.history)

@@ -14,8 +14,10 @@ init_plan time.
 from __future__ import annotations
 
 import json
+import asyncio
 import time
-from typing import Any
+
+from redis.asyncio import Redis
 
 from nanoclaw.models.task import Subtask, TaskPlan, TaskStatus
 from nanoclaw.storage.redis_client import get_redis
@@ -309,7 +311,7 @@ class RedisQueue(TaskQueue):
                 await redis.hset(self._task_key(downstream), "status", TaskStatus.CANCELLED.value)
                 await self._cascade_cancel(downstream)
 
-    def _check_all_done(self, redis: Any) -> None:
+    def _check_all_done(self, redis: Redis) -> None:
         """Publish ALL_DONE if all tasks have reached a terminal state."""
         if self._completed_count >= self._total_count:
             task = asyncio.create_task(redis.publish(self._pubsub, "ALL_DONE"))

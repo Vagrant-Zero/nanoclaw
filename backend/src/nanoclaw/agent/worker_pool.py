@@ -15,13 +15,18 @@ Each worker:
 from __future__ import annotations
 
 import asyncio
-from typing import TYPE_CHECKING, Any, Callable
+from typing import TYPE_CHECKING, Callable
 
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage
+from langgraph.graph.state import CompiledStateGraph
 
 from nanoclaw.agent.checker.checker import Checker
 from nanoclaw.agent.checker.iteration_budget import IterationBudget
 from nanoclaw.models.task import Subtask, TaskStatus
+
+import logging
+logger = logging.getLogger(__name__)
 
 # Compensation: exit code constants
 _COMPENSATION_OK = 0
@@ -33,7 +38,6 @@ if TYPE_CHECKING:
 
 _WORKER_TIMEOUT_SECONDS = 300  # 5 minutes max per subtask
 _DEQUEUE_POLL_SECONDS = 0.1
-
 
 class WorkerPool:
     """Manages a pool of concurrent async workers.
@@ -54,9 +58,9 @@ class WorkerPool:
     def __init__(
         self,
         task_queue: TaskQueue,
-        react_agent: Any,
+        react_agent: CompiledStateGraph,
         num_workers: int = 3,
-        llm: Any | None = None,
+        llm: BaseChatModel | None = None,
         sse_callback: Callable | None = None,
     ) -> None:
         self._task_queue = task_queue
@@ -111,6 +115,7 @@ class WorkerPool:
             try:
                 subtask = await self._task_queue.dequeue()
             except Exception:
+                logger.warning('Worker dequeue error', exc_info=True)
                 await asyncio.sleep(_DEQUEUE_POLL_SECONDS)
                 continue
 
@@ -179,7 +184,7 @@ class WorkerPool:
         })
 
     async def _on_failed(
-        self, subtask: Subtask, result: str, check_result: Any,
+        self, subtask: Subtask, result: str, check_result: CheckResult,
     ) -> None:
         """Subtask failed check — classify and decide next step."""
         category = check_result.failure_category or "execution"
@@ -335,12 +340,11 @@ class WorkerPool:
             if callable(self._sse_callback):
                 await self._sse_callback(event, data)
         except Exception:
-            pass
+            logger.warning(f"Exception in {fpath.name}: %s", _exc_info=True)
 
     def _state_user_request(self) -> str:
         """Build a generic user request string from session context."""
         return f"Execute subtasks for session {self.session_id}"
-
 
 async def _null_sse_callback(event: str, data: dict) -> None:
     """Default no-op SSE callback."""

@@ -13,6 +13,7 @@ import time
 from sqlalchemy import text
 
 from nanoclaw.models.task import Subtask, TaskPlan
+from nanoclaw.storage._jsonb import deserialize_jsonb
 from nanoclaw.storage.db import get_session
 from nanoclaw.storage.task_repo import TaskRepository
 
@@ -59,7 +60,7 @@ class PgTaskRepo(TaskRepository):
             ).fetchone()
         if row is None:
             return None
-        return TaskPlan.from_dict(row.data if isinstance(row.data, (dict, list)) else json.loads(row.data))
+        return TaskPlan.from_dict(deserialize_jsonb(row.data))
 
     async def update_subtask(self, session_id: str, subtask: Subtask) -> None:
         """Read current plan, find and replace the subtask, write back.

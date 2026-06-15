@@ -14,9 +14,9 @@ from __future__ import annotations
 import asyncio
 import time
 
-from typing import Any
-
+from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import AIMessage
+from langgraph.graph.state import CompiledStateGraph
 from langgraph.graph import END, StateGraph
 
 from nanoclaw.agent.nodes.planner import create_planner_node
@@ -175,10 +175,10 @@ async def _collect_node(state: dict) -> dict:
 
 
 def create_supervisor(
-    llm: Any,
+    llm: BaseChatModel,
     tool_registry: ToolRegistry,
     session_repo: SessionRepository,
-) -> Any:
+) -> CompiledStateGraph:
     """Create the compiled Supervisor LangGraph with both paths.
 
     Args:

@@ -6,8 +6,6 @@ import time
 from abc import ABC, abstractmethod
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Any
-
 from nanoclaw.scheduler.cron import is_due
 
 
@@ -59,7 +57,7 @@ class ScheduledTaskRepo(ABC):
         """Delete a task by ID."""
 
     @abstractmethod
-    async def update(self, task_id: str, updates: dict[str, Any]) -> ScheduledTask | None:
+    async def update(self, task_id: str, updates: dict[str, object]) -> ScheduledTask | None:
         """Partial update (e.g. ``{"enabled": False}``). Returns updated task."""
 
 
