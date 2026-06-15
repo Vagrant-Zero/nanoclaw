@@ -29,6 +29,52 @@ _engine = None
 _sessionmaker: async_sessionmaker[AsyncSession] | None = None
 
 
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split SQL text into individual statements, preserving semicolons
+    inside PL/pgSQL function bodies ($$-delimited strings).
+
+    Uses a simple state-machine that tracks whether we are inside a
+    ``$$ ... $$`` dollar-quoted block where semicolons are part of the
+    function body rather than statement terminators.
+    """
+    statements: list[str] = []
+    current: list[str] = []
+    in_dollar = False
+
+    i = 0
+    while i < len(sql):
+        ch = sql[i]
+
+        # Track $$ blocks
+        if ch == "$" and i + 1 < len(sql) and sql[i + 1] == "$":
+            if not in_dollar:
+                in_dollar = True
+                current.append("$$")
+                i += 2
+                continue
+            elif i + 2 < len(sql) and sql[i + 2] != "$":
+                in_dollar = False
+                current.append("$$")
+                i += 2
+                continue
+
+        if ch == ";" and not in_dollar:
+            stmt = "".join(current).strip()
+            if stmt:
+                statements.append(stmt)
+            current = []
+        else:
+            current.append(ch)
+        i += 1
+
+    # Last statement (no trailing semicolon)
+    stmt = "".join(current).strip()
+    if stmt and stmt not in ("", " "):
+        statements.append(stmt)
+
+    return statements
+
+
 def get_db_url() -> str:
     """Return the database URL from settings, with a sensible fallback."""
     return settings.db_url or "postgresql+asyncpg://nanoclaw:nanoclaw_dev@localhost:5432/nanoclaw"
@@ -50,13 +96,10 @@ async def init_db() -> None:
     _sql_path = pathlib.Path(__file__).resolve().parent.parent.parent / "migrations" / "init.sql"
     if _sql_path.exists():
         _sql = _sql_path.read_text()
-        # Split by semicolons and execute each statement separately
-        for _stmt in _sql.split(";"):
-            _stmt = _stmt.strip()
-            if _stmt:
-                async with _sessionmaker() as _conn:
-                    async with _conn.begin():
-                        await _conn.execute(text(_stmt + ";"))
+        for _stmt in _split_sql_statements(_sql):
+            async with _sessionmaker() as _conn:
+                async with _conn.begin():
+                    await _conn.execute(text(_stmt))
 
     # Warm-up the async pool: establish connections now so the first
     # request does not pay lazy-connect latency (~50ms+ per connection).
