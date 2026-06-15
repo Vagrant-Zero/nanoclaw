@@ -29,6 +29,7 @@ if TYPE_CHECKING:
 
 _SCHEDULER_POLL_SECONDS = 60
 _DREAMING_HOUR = 2  # 02:00
+_DISPATCH_TIMEOUT = 120  # Max seconds for one dispatch cycle
 
 # ── Scheduler ──────────────────────────────────────────────────────
 
@@ -101,7 +102,10 @@ class Scheduler:
         """Main loop: check tasks and dreaming every 60 seconds."""
         while self._running:
             try:
-                await self._check_and_dispatch()
+                async with asyncio.timeout(_DISPATCH_TIMEOUT):
+                    await self._check_and_dispatch()
+            except asyncio.TimeoutError:
+                logger.warning("Scheduler dispatch cycle timed out (>{_DISPATCH_TIMEOUT}s) — continuing")
             except Exception:
                 logger.warning('Scheduler loop error', exc_info=True)  # Non-fatal — loop keeps running
             await asyncio.sleep(_SCHEDULER_POLL_SECONDS)
