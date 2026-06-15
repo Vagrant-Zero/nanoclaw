@@ -195,6 +195,26 @@ describe("SseParser (shared parser)", () => {
     expect(result.answerText).toBe("文件内容...");
   });
 
+  test("handles CRLF line endings (sse-starlette v3 default)", () => {
+    // sse-starlette v3.4.4 uses \r\n as the default separator. The
+    // parser must normalise \r\n to \n so event splitting on \n\n
+    // works correctly.
+    const parser = new SseParser();
+    const crlf = [
+      "event: message_chunk",
+      'data: {"content":"Hello"}',
+      "",
+      "event: done",
+      'data: {"session_id":"crlf-test"}',
+      "",
+    ].join("\r\n") + "\r\n";
+
+    const events = parser.feed(crlf);
+    expect(events.length).toBe(2);
+    expect(events[0].event).toBe("message_chunk");
+    expect(events[1].event).toBe("done");
+  });
+
   test("flush returns remaining buffered data", () => {
     const parser = new SseParser();
     parser.feed('event: message_chunk\ndata: {"content":"a"}\n\n');

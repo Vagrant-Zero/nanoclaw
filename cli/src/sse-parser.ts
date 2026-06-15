@@ -20,7 +20,9 @@ export class SseParser {
    * Feed a raw text chunk. Returns zero or more complete events.
    */
   feed(chunk: string): SseEvent[] {
-    this.buffer += chunk;
+    // Normalise CRLF to LF — sse-starlette v3+ defaults to \r\n
+    // line endings, producing \r\n\r\n event delimiters instead of \n\n.
+    this.buffer += chunk.replace(/\r\n/g, "\n");
     const events: SseEvent[] = [];
 
     // SSE protocol: events terminated by double newline
