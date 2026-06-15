@@ -139,9 +139,12 @@ export function StreamingChat({
       // setContent updates before the parent's setStreamingMsg(null)
       // triggers component unmount (React 18 batch avoidance).
       const finalText = fullTextRef.current;
+      // Use a longer timeout so Ink has time to flush the rendered
+      // content to the terminal before onDone triggers component unmount
+      // via the parent's setStreamingMsg(null).
       setTimeout(() => {
         onDoneRef.current(finalText, completed ? sessionIdRef.current : "");
-      }, 0);
+      }, 100);
     };
 
     const dispatch = (event: string, data: unknown) => {
