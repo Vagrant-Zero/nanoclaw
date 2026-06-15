@@ -8,6 +8,7 @@ The LLM fallback uses response_format to guarantee clean JSON output.
 from __future__ import annotations
 
 import json
+import logging
 
 from langchain_core.language_models.chat_models import BaseChatModel
 from langchain_core.messages import HumanMessage, SystemMessage
