@@ -328,24 +328,30 @@ class RedisQueue(TaskQueue):
             else:
                 subtask = Subtask.from_dict(data)
             self._tasks[task_id] = subtask
-            subtask = Subtask.from_dict(data)
-            self._tasks[task_id] = subtask
 
-        # Phase 1: Scan for expired leases BEFORE clearing anything
+        # Phase 1: Scan for expired leases — collect recovered task ids,
+        # do NOT lpush yet (Phase 2 will delete the queue first).
+        recovered_ids: list[str] = []
         for task_id in list(self._tasks):
             lease_ts = await redis.zscore(self._leases, task_id)
             if lease_ts is not None and lease_ts < time.time():
                 subtask = self._tasks[task_id]
                 subtask.status = TaskStatus.PENDING
-                await redis.lpush(self._q, task_id)
+                recovered_ids.append(task_id)
                 await redis.zrem(self._leases, task_id)
 
-        # Phase 2: Clear stale data and re-enqueue (idempotency)
+        # Phase 2: Clear stale queue/leases, then re-enqueue all pending work.
         await redis.delete(self._q)
         await redis.delete(self._leases)
 
+        # Re-enqueue tasks recovered from expired leases (deps already satisfied).
+        for task_id in recovered_ids:
+            await redis.lpush(self._q, task_id)
+
         # Re-enqueue PENDING tasks that are ready (no dependencies)
         for task_id, subtask in self._tasks.items():
+            if task_id in recovered_ids:
+                continue  # already re-enqueued above
             if subtask.status == TaskStatus.PENDING and not subtask.depends_on:
                 await redis.lpush(self._q, task_id)
             # Re-enqueue RETRYING tasks

@@ -67,7 +67,7 @@ def create_react_agent(
                     id=state.get("session_id", "") or "",
                     messages=chat_msgs,
                 )
-                prompt_list = await context_manager.build_prompt(ctx)
+                prompt_list = await context_manager.build_prompt(ctx, llm=llm)
                 response = await llm.ainvoke(prompt_list, tools=openai_tools)
             else:
                 response = await llm.ainvoke(

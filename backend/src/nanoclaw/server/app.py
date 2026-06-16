@@ -19,6 +19,8 @@ from nanoclaw.config import settings
 from nanoclaw.log_config import setup_logging
 from sqlalchemy import text
 from nanoclaw.context import ContextManager
+from nanoclaw.context.auto_compact import AutoCompact
+from nanoclaw.context.compression_config import CompressionConfig
 from nanoclaw.dreaming import DreamingEngine, register_dreaming_tools
 from nanoclaw.eval import EventLogger
 from nanoclaw.memory import create_memory_store, ReflectionEngine
@@ -85,7 +87,15 @@ async def lifespan(app: FastAPI):
     memory_store = create_memory_store(settings.chroma_persist_dir)
     llm = get_llm()
     reflection_engine = ReflectionEngine(memory_store, llm=llm)
-    context_manager = ContextManager(memory_store)
+    _auto_compact = AutoCompact(
+        config=CompressionConfig(),
+        transcript_dir=settings.eval_dir,
+    )
+    context_manager = ContextManager(
+        memory_store,
+        compression_config=CompressionConfig(),
+        auto_compact=_auto_compact,
+    )
 
     app.state.event_logger = event_logger
     app.state.memory_store = memory_store
