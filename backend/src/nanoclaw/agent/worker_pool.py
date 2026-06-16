@@ -131,6 +131,10 @@ class WorkerPool:
             })
 
             try:
+                # Start heartbeat lease renewal; cancelled after execution
+                _lease_task = asyncio.create_task(
+                    _heartbeat_lease(self._task_queue, subtask.id)
+                )
                 # Execute with timeout
                 result = await asyncio.wait_for(
                     self._react_agent.ainvoke({
@@ -144,12 +148,6 @@ class WorkerPool:
                     timeout=_WORKER_TIMEOUT_SECONDS,
                 )
 
-                # Renew lease before execution (heartbeat for RedisQueue)
-                try:
-                    await self._task_queue.renew_lease(subtask.id)
-                except Exception:
-                    pass
-
                 # Guard against None return from ainvoke
                 if result is None:
                     result_content = ""
@@ -158,6 +156,9 @@ class WorkerPool:
                     result_content = messages[-1].content if messages else ""
 
                 # Check result
+                # Stop lease renewal heartbeat
+                _lease_task.cancel()
+
                 check_result = await self._checker.check(
                     subtask, result_content,
                     user_request=self._state_user_request(),
@@ -169,8 +170,10 @@ class WorkerPool:
                     await self._on_failed(subtask, result_content, check_result)
 
             except asyncio.TimeoutError:
+                _lease_task.cancel()
                 await self._on_timeout(subtask)
             except Exception as exc:
+                _lease_task.cancel()
                 await self._on_error(subtask, exc)
 
     # ── Result handlers ──
@@ -355,3 +358,17 @@ class WorkerPool:
 async def _null_sse_callback(event: str, data: dict) -> None:
     """Default no-op SSE callback."""
     pass
+
+
+async def _heartbeat_lease(task_queue, task_id: str, interval: float = 30) -> None:
+    """Periodically renew a worker lease so it does not expire during
+    long-running tool calls.  Runs until cancelled."""
+    try:
+        while True:
+            await asyncio.sleep(interval)
+            try:
+                await task_queue.renew_lease(task_id)
+            except Exception:
+                pass
+    except asyncio.CancelledError:
+        pass

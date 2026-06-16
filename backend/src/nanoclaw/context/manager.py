@@ -11,6 +11,10 @@ The build order is::
 
 from __future__ import annotations
 
+import logging
+
+logger = logging.getLogger(__name__)
+
 from pathlib import Path
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
@@ -72,11 +76,12 @@ class ContextManager:
         memory_store: MemoryStore | None = None,
         compression_config: CompressionConfig | None = None,
         auto_compact: AutoCompact | None = None,
+
         event_logger: EventLogger | None = None,
         transcript_dir: str | None = None,
     ) -> None:
         self._memory_store = memory_store
-        self._compression_config = compression_config
+        self._compression_config = compression_config or CompressionConfig()
         self._event_logger = event_logger
         self._compression_count = 0
         # Wire transcript_dir into auto_compact if not already configured

@@ -158,7 +158,7 @@ class RedisQueue(TaskQueue):
             ):
                 dtask = self._tasks.get(downstream)
                 if dtask is not None:
-                    dtask.status = TaskStatus.RUNNING  # Will transition to RUNNING on dequeue
+                    # Keep status as PENDING until dequeue() sets it to RUNNING
                     await redis.lpush(self._q, downstream)
 
         # Call _check_all_done AFTER all downstream tasks are enqueued,
