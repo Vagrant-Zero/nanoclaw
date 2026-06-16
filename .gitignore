@@ -13,3 +13,6 @@ API.md
 .claude
 .idea
 backend/.nanoclaw
+
+# Codex runtime files
+.nanoclaw/dreams/.last_dreaming
