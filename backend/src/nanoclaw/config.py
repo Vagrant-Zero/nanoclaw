@@ -27,6 +27,9 @@ class Settings(BaseSettings):
     llm_base_url: str = "https://api.deepseek.com"
     openai_api_key: str = ""
 
+    # Tavily search API key (non-prefixed env var)
+    tavily_api_key: str = ""
+
     # Server configuration
     host: str = "127.0.0.1"
     port: int = 8420
@@ -72,7 +75,7 @@ class Settings(BaseSettings):
 
     def __init__(self, **kwargs):
         # Load from env / .env before prefix resolution
-        for field in ("openai_api_key", "llm_model", "llm_base_url"):
+        for field in ("openai_api_key", "tavily_api_key", "llm_model", "llm_base_url"):
             env_val = os.environ.get(field.upper(), "")
             if env_val and field not in kwargs:
                 kwargs[field] = env_val
