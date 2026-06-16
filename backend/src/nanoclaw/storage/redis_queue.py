@@ -161,6 +161,8 @@ class RedisQueue(TaskQueue):
                     dtask.status = TaskStatus.RUNNING  # Will transition to RUNNING on dequeue
                     await redis.lpush(self._q, downstream)
 
+        # Call _check_all_done AFTER all downstream tasks are enqueued,
+        # so ALL_DONE is never published while tasks are still being enqueued.
         self._check_all_done(redis)
 
     async def requeue(self, subtask: Subtask) -> None:
@@ -259,8 +261,13 @@ class RedisQueue(TaskQueue):
         except asyncio.TimeoutError:
             await pubsub.unsubscribe(self._pubsub)
             raise
+        finally:
+            # Ensure pubsub connection is always cleaned up
+            try:
+                await pubsub.unsubscribe(self._pubsub)
+            except Exception:
+                pass
 
-        await pubsub.unsubscribe(self._pubsub)
         return self._collect_results()
 
     async def snapshot(self) -> dict:
@@ -294,30 +301,56 @@ class RedisQueue(TaskQueue):
         self._completed_count = snapshot["completed_count"]
         self._total_count = snapshot["total_count"]
 
-        # Clear stale queue data (idempotency)
-        await redis.delete(self._q)
-        await redis.delete(self._leases)
-
-        # Rehydrate task objects from snapshot
+        # Rehydrate task objects from snapshot.
+        # Prefer redis_tasks (direct from Redis) over in-memory tasks
+        # to ensure consistency after a crash.
+        task_data_src = snapshot.get("redis_tasks") or snapshot.get("tasks", {})
         self._tasks = {}
-        for task_id, data in snapshot["tasks"].items():
+        for task_id, data in task_data_src.items():
+            if isinstance(data, dict):
+                # redis_tasks stores raw dicts (from hgetall);
+                # convert via Subtask.from_dict
+                subtask_data = {}
+                if "db" in data:
+                    # Already a dict from hgetall
+                    subtask_data = {
+                        "id": task_id,
+                        "description": data.get("description", ""),
+                        "status": data.get("status", "PENDING"),
+                        "depends_on": json.loads(data.get("depends_on", "[]")) if isinstance(data.get("depends_on"), str) else data.get("depends_on", []),
+                        "result": data.get("result", None),
+                        "error": data.get("error", None),
+                        "retry_count": int(data.get("retry_count", 0)),
+                    }
+                    subtask = Subtask.from_dict(subtask_data)
+                else:
+                    subtask = Subtask.from_dict(data)
+            else:
+                subtask = Subtask.from_dict(data)
+            self._tasks[task_id] = subtask
             subtask = Subtask.from_dict(data)
             self._tasks[task_id] = subtask
 
-            # Re-enqueue PENDING tasks that are ready (no dependencies)
-            if subtask.status == TaskStatus.PENDING and not subtask.depends_on:
-                await redis.lpush(self._q, task_id)
-
-            # Re-enqueue RETRYING tasks
-            if subtask.status == TaskStatus.RETRYING:
-                await redis.lpush(self._q, task_id)
-
-            # Check for expired leases and reset to PENDING
+        # Phase 1: Scan for expired leases BEFORE clearing anything
+        for task_id in list(self._tasks):
             lease_ts = await redis.zscore(self._leases, task_id)
             if lease_ts is not None and lease_ts < time.time():
+                subtask = self._tasks[task_id]
                 subtask.status = TaskStatus.PENDING
                 await redis.lpush(self._q, task_id)
                 await redis.zrem(self._leases, task_id)
+
+        # Phase 2: Clear stale data and re-enqueue (idempotency)
+        await redis.delete(self._q)
+        await redis.delete(self._leases)
+
+        # Re-enqueue PENDING tasks that are ready (no dependencies)
+        for task_id, subtask in self._tasks.items():
+            if subtask.status == TaskStatus.PENDING and not subtask.depends_on:
+                await redis.lpush(self._q, task_id)
+            # Re-enqueue RETRYING tasks
+            if subtask.status == TaskStatus.RETRYING:
+                await redis.lpush(self._q, task_id)
 
     # ── Internal helpers ───────────────────────────────────────────
 

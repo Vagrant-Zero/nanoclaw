@@ -11,11 +11,12 @@ The build order is::
 
 from __future__ import annotations
 
+from pathlib import Path
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
 from langchain_core.language_models.chat_models import BaseChatModel
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
+from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
 from nanoclaw.context.auto_compact import AutoCompact
 from nanoclaw.context.micro_compact import MicroCompact
@@ -72,12 +73,17 @@ class ContextManager:
         compression_config: CompressionConfig | None = None,
         auto_compact: AutoCompact | None = None,
         event_logger: EventLogger | None = None,
+        transcript_dir: str | None = None,
     ) -> None:
         self._memory_store = memory_store
         self._compression_config = compression_config
-        self._auto_compact = auto_compact
         self._event_logger = event_logger
         self._compression_count = 0
+        # Wire transcript_dir into auto_compact if not already configured
+        if auto_compact is not None and transcript_dir is not None:
+            if auto_compact._transcript_dir is None:
+                auto_compact._transcript_dir = Path(transcript_dir)
+        self._auto_compact = auto_compact
 
     async def build_prompt(
         self,
@@ -123,6 +129,24 @@ class ContextManager:
 
         # ── Compression pipeline ────────────────────────────────────
         if self._compression_config is not None:
+            # Step A0: Code-level MC — compress individual tool results
+            for msg in messages:
+                if isinstance(msg, ToolMessage):
+                    tool_name = getattr(msg, "name", "unknown")
+                    content_str = str(getattr(msg, "content", ""))
+                    if content_str:
+                        msg.content = MicroCompact.compress_tool_result(
+                            content_str, tool_name,
+                        )
+                elif isinstance(msg, AIMessage):
+                    # Compress large AI messages (e.g. task plans)
+                    content_str = str(getattr(msg, "content", ""))
+                    if len(content_str) > 1500:
+                        msg.content = (
+                            content_str[:1500]
+                            + f"\n... ({len(content_str) - 1500} chars omitted) ..."
+                        )
+
             # Step A: Time-based MC — clear expired tool_results
             MicroCompact.time_based_compact(
                 messages,
