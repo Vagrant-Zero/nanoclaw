@@ -348,12 +348,19 @@ class RedisQueue(TaskQueue):
         for task_id in recovered_ids:
             await redis.lpush(self._q, task_id)
 
-        # Re-enqueue PENDING tasks that are ready (no dependencies)
+        # Re-enqueue PENDING tasks that are ready (all dependencies satisfied).
+        # This catches both leaf nodes (no deps) and non-leaf nodes whose
+        # deps were all SUCCEEDED before the crash.
         for task_id, subtask in self._tasks.items():
             if task_id in recovered_ids:
                 continue  # already re-enqueued above
-            if subtask.status == TaskStatus.PENDING and not subtask.depends_on:
-                await redis.lpush(self._q, task_id)
+            if subtask.status == TaskStatus.PENDING:
+                deps = self._dag.get(task_id, [])
+                if not deps or all(
+                    self._tasks[d].status == TaskStatus.SUCCEEDED
+                    for d in deps
+                ):
+                    await redis.lpush(self._q, task_id)
             # Re-enqueue RETRYING tasks
             if subtask.status == TaskStatus.RETRYING:
                 await redis.lpush(self._q, task_id)

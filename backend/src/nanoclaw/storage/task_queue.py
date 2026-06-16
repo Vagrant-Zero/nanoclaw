@@ -214,4 +214,10 @@ class MemoryQueue(TaskQueue):
             self._tasks[tid] = SubtaskModel(**tdata)
             self._events[tid] = asyncio.Event()
             if tdata["status"] in (TaskStatus.PENDING, TaskStatus.RETRYING):
-                await self._ready.put(self._tasks[tid])
+                # Only enqueue if task is ready (leaf or all deps SUCCEEDED)
+                deps = self._dag.get(tid, [])
+                if not deps or all(
+                    self._tasks[d].status == TaskStatus.SUCCEEDED
+                    for d in deps
+                ):
+                    await self._ready.put(self._tasks[tid])
