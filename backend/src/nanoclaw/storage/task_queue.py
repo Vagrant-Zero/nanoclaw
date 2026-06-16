@@ -56,6 +56,13 @@ class TaskQueue(ABC):
     async def snapshot(self) -> dict:
         """Serialize queue state for checkpoint persistence."""
 
+    async def renew_lease(self, task_id: str) -> None:
+        """Extend the worker lease for a running subtask (heartbeat).
+
+        No-op in MemoryQueue — only relevant for RedisQueue.
+        """
+        pass
+
     @abstractmethod
     async def restore(self, snapshot: dict) -> None:
         """Rebuild queue state from a checkpoint snapshot."""

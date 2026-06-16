@@ -144,6 +144,12 @@ class WorkerPool:
                     timeout=_WORKER_TIMEOUT_SECONDS,
                 )
 
+                # Renew lease before execution (heartbeat for RedisQueue)
+                try:
+                    await self._task_queue.renew_lease(subtask.id)
+                except Exception:
+                    pass
+
                 # Guard against None return from ainvoke
                 if result is None:
                     result_content = ""
